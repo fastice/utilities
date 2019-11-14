@@ -1,5 +1,5 @@
 __all__ = ['dols', 'strip','popd','pushd','readImage','writeImage','readLLtoRA','writeLLtoRAformat',
-           'myerror','runMyThreads','mywarning','myalert','hsvVelCmap','getWKT_PROJ','argusMesh','myPrompt','callMyProg','logger']
+           'myerror','runMyThreads','mywarning','myalert','hsvVelCmap','getWKT_PROJ','argusMesh','myPrompt','callMyProg','logger', 'processProfile']
 from utilities.dols import dols
 from utilities.myerror import myerror
 from utilities.strip import strip
@@ -26,3 +26,4 @@ from utilities.argusMesh import argusMesh
 from utilities.myPrompt import myPrompt
 from utilities.callMyProg import callMyProg
 from utilities.logger import logger
+from utilities.processProfile import processProfile

@@ -58,6 +58,10 @@ class geodat :
         x=scale * x.reshape(sh)
         y=scale * y.reshape(sh)
         return x,y
+    
+    def lltoImage(self,lat,lon,scale=None) :
+        x,y=self.lltoxym(lat,lon)
+        return self.xymtoImage(x,y)
 
     def lltoxykm(self,lat,lon) :
         """ lat,lon is an nparray of xy points in units of km, output is x,y in KILOmeters """

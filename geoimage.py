@@ -6,9 +6,9 @@ from utilities.writeImage import writeImage
 from utilities.myerror import myerror
 from utilities import geodat
 import os
-import urllib.request
+#import urllib.request
 from osgeo.gdalconst import *
-from osgeo import gdal, gdal_array
+from osgeo import gdal, gdal_array, osr
 from datetime import datetime
 
 #----------------------------------------------------------------------------------------------------------------------------------------------------
@@ -222,38 +222,39 @@ class geoimage :
     
     def getWKT_PROJ(self,epsg_code) :
         url="http://spatialreference.org/ref/epsg/{0}/prettywkt/".format(epsg_code)
-        response=urllib.request.urlopen(url)
-        remove_spaces =str(response.read()).replace(" ","")
-        output=remove_spaces.replace("\\n","").replace("b\'","").replace("\'","")
-        return output
+        #response=urllib.request.urlopen(url)
+        #remove_spaces =str(response.read()).replace(" ","")
+        #output=remove_spaces.replace("\\n","").replace("b\'","").replace("\'","")
+        sr=osr.SpatialReference()
+        sr.ImportFromEPSG(epsg_code)
+        return sr.ExportToWkt()
+        
     
     #--------------------------------------------------------------------------
     # write My Tiff 
     #--------------------------------------------------------------------------
-    def writeMyTiff(self,tiffFile,epsg=None,noDataDefault=None) :
+    def writeMyTiff(self,tiffFile,epsg=None,noDataDefault=None,predictor=1) :
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note : tiffFile should not have a ".tif" extension - one will be added.        
         """
-        #
+        # define various set up stuff
+        suffixDict={'scalar' : [''], 'velocity' : ['.vx','.vy','.v'], 'error' : ['.ex','.ey']}
+        noDataDict={'.vx' : -2.0e9 , '.vy' : -2.0e9,'.v' : -1.0, '.ex' : -1.0, '.ey' : -1.0,'' : noDataDefault}
+        typeDict={'scalar' : self.x, 'velocity' : self.vx,'error': self.ex}
+        predictor=int(predictor)
+        if predictor > 3 or predictor < 1 :
+            predictor=1
         # Default to greenland
         if epsg == None :
             epsg=3413
         try :
-            if self.geoType == 'scalar' :
-               ny,nx=self.x.shape
-               gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(self.x.dtype)
-               suffixes=['']
-            elif self.geoType== 'velocity' :
-                ny,nx=self.vx.shape
-                gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(self.vx.dtype)
-                suffixes=['.vx','.vy','.v']   
-            elif self.geoType=='error':
-                ny,nx=self.ex.shape
-                gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(self.ex.dtype)
-                suffixes=['.ex','.ey']
-            else :
-                myerror('writeMyTiff: invalide geoType'+self.geoType)
-            #
+            suffixes=suffixDict[self.geoType]
+            gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(typeDict[self.geoType].dtype)
+            ny,nx=typeDict[self.geoType].shape
+        except :
+            myerror('writeMyTiff: invalide geoType '+self.geoType)
+        #     
+        try :      
             # compute and set geotransform data
             x0,y0=self.geo.originInM()
             dx,dy=self.geo.pixSizeInM()
@@ -266,29 +267,29 @@ class geoimage :
             for suffix in suffixes :
                 # setup geotiff
                 driver=gdal.GetDriverByName( "GTiff")
-                dst_ds=driver.Create(tiffFile+suffix+'.tif',nx,ny,1,gdalType,['COMPRESS=LZW'] )
+                dst_ds=driver.Create(tiffFile+suffix+'.tif',nx,ny,1,gdalType,['COMPRESS=LZW','PREDICTOR={0:d}'.format(predictor),'TILED=YES'] )
                 dst_ds.SetGeoTransform((xur,dx,0,yur,0,-dy))
                 dst_ds.SetProjection(wkt)
-                noData=noDataDefault
-                if suffix in ['.vx','.vy','.dT' ] :
-                    noData=-2.0e9
-                    tmp=eval('self'+suffix)
-                    tmp[np.isnan(tmp)]=noData
-                elif suffix in ['.ex','.ey','.v'] :
-                    noData=-1.0
-                    tmp=eval('self'+suffix)
+                # set nodata
+                noData=noDataDict[suffix]
+                if noData != None :
+                    if self.geoType=='scalar' :
+                        tmp=self.x
+                    else :
+                        tmp=eval('self'+suffix)
                     tmp[np.isnan(tmp)]=noData
                 # write data 
                 if self.geoType == 'scalar' :
                     dst_ds.GetRasterBand(1).WriteArray(np.flipud(self.x))
                 else :
                     dst_ds.GetRasterBand(1).WriteArray(np.flipud(eval('self'+suffix)))
+                # set no data value in tif
                 if noData != None :
                     dst_ds.GetRasterBand(1).SetNoDataValue(noData)
                 dst_ds.FlushCache()
                 dst_ds=None
         except :
-            myerror("geoimage.writeMyTiff: error writing tiff file "+tiffFile)
+            myerror("geoimage.writeMyTiff - : error writing tiff file "+tiffFile)
     
 
     #--------------------------------------------------------------------------

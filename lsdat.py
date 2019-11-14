@@ -8,7 +8,7 @@ class lsdat :
 
     """ lsdat object - contains information from a landsat match dat file"""
 
-    def __init__(self,x0=None,y0=None,xs=None,ys=None,dx=None,dy=None,domain=None) :
+    def __init__(self,x0=None,y0=None,xs=None,ys=None,dx=None,dy=None,domain=None,noProjection=False) :
         """ Initialize lsdat(x0=None,y0=None,xs=None,ys=None,dx=None,dy=None,domain=['greenland'])
         domain = greenland or antarctica """
         # set everything to zero as default
@@ -42,12 +42,13 @@ class lsdat :
                 exit()
         #
         # setup conversions
-        #
-        self.llproj=pyproj.Proj("+init=EPSG:4326")
-        if self.domain == 3413:
-            self.xyproj=pyproj.Proj("+init=EPSG:3413")
-        elif self.domain == 3031 :
-            self.xyproj=pyproj.Proj("+init=EPSG:3031")
+        # This step is time consuming, so opt out if not needed.
+        if not noProjection :
+            self.llproj=pyproj.Proj("+init=EPSG:4326")
+            if self.domain == 3413:
+                self.xyproj=pyproj.Proj("+init=EPSG:3413")
+            elif self.domain == 3031 :
+                self.xyproj=pyproj.Proj("+init=EPSG:3031")
 #        print('setting up projections',self.domain)
         
     def lltoxym(self,lat,lon,scale=None) :
@@ -126,50 +127,42 @@ class lsdat :
         xd=np.array([[self.xs,self.ys],[self.dx,self.dy],[self.x0,self.y0]])
         return xd
 
+    def tryOptParam(self,key,myDict,myType) :
+        ''' check if key in dict before attempting to index.return typed value'''
+        if key in myDict.keys() :
+            return myType(myDict[key])
+        return None
+    
     def readLSdat(self,LSDatFile,printData=False) :
+        myDict={}
         try :
             fp=open(LSDatFile,'r')
         # crude check sum
             for line in fp :
-                if 'fileEarly' in line :
-                    self.fileEarly=line.split('=')[-1].strip()
-                elif 'fileLate' in line :
-                    self.fileLate=line.split('=')[-1].strip()                
-                elif 'x0' in line :
-                    self.x0=float(line.split('=')[-1])/1000.
-                elif 'y0' in line :
-                    self.y0=float(line.split('=')[-1])/1000.
-                elif 'dx' in line :
-                    self.dxImage=float(line.split('=')[-1])
-                elif 'dy' in line :
-                    self.dyImage=float(line.split('=')[-1])
-                elif 'stepX' in line :
-                    self.stepX=int(line.split('=')[-1])
-                elif 'step' in line :
-                    self.stepY=int(line.split('=')[-1])
-                elif 'nx' in line :
-                    self.xs=int(line.split('=')[-1])
-                elif 'ny' in line :
-                    self.ys=int(line.split('=')[-1])
-                elif 'slowFlag' in line :
-                    self.slowFlag=False
-                    if int(line.split('=')[-1]) > 0 :
-                        self.slowFlag=True
-                elif 'EPSG' in line :
-                    self.domain=int(line.split('=')[-1])
-                elif 'earlyImageJD' in line :
-                    self.JD1=float(line.split('=')[-1])
-                elif 'lateImageJD' in line :
-                    self.JD2=float(line.split('=')[-1])
-                elif 'Success_rate_for_attempted_matches' in line :
-                    self.successRate=float(line.split('=')[-1])
-                elif 'Culled_rate_for_attempted_matches' in line :
-                    self.culledRate=float(line.split('=')[-1])
-                elif 'Mean_sigmaX' in line :
-                    self.sigmaX=float(line.split('=')[-1])
-                elif 'Mean_sigmaY' in line :
-                    self.sigmaY=float(line.split('=')[-1])
-            fp.close()
+                pieces=line.split('=')
+                if len(pieces) == 2 :
+                    myDict[pieces[0].strip()]=pieces[1].strip()
+            fp.close()       
+            # now stuff values
+            self.fileEarly=myDict['fileEarly']
+            self.fileLate=myDict['fileLate']                
+            self.x0=float(myDict['x0'])/1000.  
+            self.y0=float(myDict['y0'])/1000.
+            self.dxImage=float(myDict['dx'])
+            self.dyImage=float(myDict['dy'])
+            self.stepX=int(myDict['stepX'])
+            self.stepY=int(myDict['stepY'])
+            self.xs=int(myDict['nx'])
+            self.ys=int(myDict['ny'])
+            self.slowFlag=int(myDict['slowFlag']) > 0 
+            self.domain=int(myDict['EPSG']) 
+            self.JD1=float(myDict['earlyImageJD']) 
+            self.JD2=float(myDict['lateImageJD']) 
+            self.successRate=float(myDict['Success_rate_for_attempted_matches(%)']) 
+            self.culledRate=self.tryOptParam('Culled_rate_for_attempted_matches(%)',myDict,float)
+            self.sigmaX=self.tryOptParam('Mean_sigmaX',myDict,float)
+            self.sigmaY=self.tryOptParam('Mean_sigmaY',myDict,float)
+            
             self.dx=self.dxImage*self.stepX
             self.dy=self.dyImage*self.stepY
             self.date1=datetime.strptime('2000:01:01',"%Y:%m:%d") + timedelta(days=self.JD1-2451544.5)
@@ -186,7 +179,6 @@ class lsdat :
                 print(self.date1,self.date2)
                 print(self.successRate,self.culledRate)
                 print(self.sigmaX,self.sigmaY)
-
         except :
                 myerror("Problem reading lsdat file "+LSDatFile)
         

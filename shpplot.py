@@ -155,9 +155,9 @@ class shpplot :
         print(uniqueLabels)
         data=list(zip(xtmp,ytmp,ltmp))  
         # sort by label
-        print(data)
+        #print(data)
         dataSorted=sorted(data, key=lambda x: x[0])
-        print(dataSorted)
+        #print(dataSorted)
         # loop over uniqueLabels - not not byLabel it will go together
         for uniqueLabel in uniqueLabels :
         # unpack sorted data
@@ -195,21 +195,12 @@ class shpplot :
     #
     # Plot time series data
     #
-    def timeSeries(self,color=None,markerSize=None,ax=None,markerStyle=None,lineStyle=None,lineWidth=None,useLabel=True,deTrend=False,timeRange=None,order=None,yRange=None):
+    def timeSeries(self,color='r',yIndex=1,markerSize=8,ax=None,markerStyle='o',lineStyle='',lineWidth=1,useLabel=True,deTrend=False,timeRange=None,order=None,yRange=None):
         # modify here later to plot other
-        y=self.y1plot
-        # defaults
-        if markerStyle is None :
-            markerStyle='o' 
-        if lineStyle is None :
-            lineStyle='' 
-        if color is None :
-            color='r'
-        if markerSize is None :
-            markerSize=12
-        if lineWidth is None :
-            lineWidth=1
-            
+        try :
+            y=[self.y1plot,self.y2plot,self.y3plot][yIndex-1]
+        except :
+            print('Invalid yIndex {0:d}'.format(yIndex))
         # zip, x,y, and labels
         y1=np.array(y)
         # cull out the good points
@@ -230,20 +221,13 @@ class shpplot :
             # override plot order with command line spec
             if order != None :
                 uniqueLabels=uniqueLabels[order]
-            print(uniqueLabels)
+            #print(uniqueLabels)
            
             # get markStyle,markerSizes
             markerStyles,markerSizes=self.plotParamHandle(markerStyle,nUnique),self.plotParamHandle(markerSize,nUnique)
             lineStyles,lineWidths=self.plotParamHandle(lineStyle,nUnique),self.plotParamHandle(lineWidth,nUnique)
             colors=self.plotParamHandle(color,nUnique)
             for lab,marker,mSize,lStyle,lWidth,pColor in zip(uniqueLabels,markerStyles,markerSizes,lineStyles,lineWidths,colors) :
-                print(lab,marker,mSize,lStyle,lWidth)
-                print(markerStyles)
-                print(markerSizes)
-                print(lineStyles)
-                print(lineWidths)
-                print(colors)
-                print(pColor)
                 #exit()
                 ii=np.where(lab == labels1)
                 # if detrend, compute fit and remove
@@ -252,12 +236,14 @@ class shpplot :
                     y1[ii]-=yt
                 if ax is None :    
                     p=plt.plot_date(x1[ii],y1[ii],color=pColor,marker=marker,markersize=mSize,linestyle=lStyle,linewidth=lWidth,label=self.name+'-'+lab)
+                    myAx=plt.gca()
                 else :
+                    myAx=ax
                     p=ax.plot_date(x1[ii],y1[ii],color=pColor,marker=marker,markersize=mSize,linestyle=lStyle,linewidth=lWidth,label=self.name+'-'+lab)
                 if timeRange != None :
-                    ax.set_xlim(timeRange)
+                    myAx.set_xlim(timeRange)
                 if yRange != None :
-                    ax.set_ylim(yRange)
+                    myAx.set_ylim(yRange)
         #
         # No label case, just plot the whole series
         else :

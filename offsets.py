@@ -32,6 +32,7 @@ class offsets :
         self.azOff,self.rgOff,self.sigmaR,self.sigmaA,self.lat,self.lon,self.matchType,self.heading,self.mask=[],[],[],[],[],[],[],[],[]
         self.cc,self.ccFile=[],None
         self.geodatrxa,self.geodatrxaFile=[],[]
+        self.geo1,self.geo2=None,None
         self.slpRg,self.slpAz=-1,-1
         self.rCoord,self.aCoord=[],[]
         self.path='.'
@@ -44,7 +45,7 @@ class offsets :
         else :
             self.fileRoot='./azimuth.offsets'
         #
-        tmp=fileRoot.split('/')
+        tmp=self.fileRoot.split('/')
         if myPath != None :
             self.setMyPath(myPath)
         elif len(tmp) > 1 :
@@ -120,8 +121,7 @@ class offsets :
         
         if myLog  != None :
            myLog.logReturn('checkOffsetFiles')
-           
-       
+             
             
     def setMyPath(self,pathName) :
         if pathName == None :
@@ -470,7 +470,7 @@ class offsets :
             self.rangeFile=fileRoot.replace('.da','.dr')
         #
         # update path if requested
-        print('--',self.azimuthFile,self.rangeFile,myPath,self.path)
+        #print('--',self.azimuthFile,self.rangeFile,myPath,self.path)
         if myPath != None :
             self.setMyPath(myPath)
         # join filename with path, this is the only place this should happen 
@@ -494,6 +494,7 @@ class offsets :
             print('\nError readOffsetsDat : tried to open an non-existent data file ',self.datFile)
             exit()
         fdat=open(self.datFile,'r')
+        # read first line
         for line in fdat :
             if len(line) > 15 and (not ';' in line) :
                 a=line.split()
@@ -506,6 +507,18 @@ class offsets :
                 if len(a) == 7 :
                     self.azErr=a[6]
                 break
+        #
+       
+        line=fdat.readline()
+    
+        try :
+            geo1,geo2=line.split()
+            if len(geo1) > 1 and len(geo2) > 1 :
+                self.geo1=geo1
+                self.geo2=geo2
+        except :
+            pass
+        fdat.close()
 
 #----------------------------------------------------------------------------------------
 # Read the actual range and offset data
@@ -513,10 +526,9 @@ class offsets :
     def readOffsets(self,fileRoot=None,rangeFile=None,datFile=None) :
         """ Read da/dr offset file at previously set up offset names, or specify directly with values as defined for init"""
         # over ride names if needed.
-
         if len(self.azimuthFile) == 0 or rangeFile != None or fileRoot !=None :
             self.offsetFileNames(fileRoot,rangeFile=None)
-
+        #print(self.nr,self.na)
         # read datFile if needed. 
         if self.nr < 1 or self.na < 1 :
             self.readOffsetsDat(datFile=datFile)
@@ -554,25 +566,30 @@ class offsets :
 # remove offsets as specified by an logical array in a list (ie., everythign flattened)
 #----------------------------------------------------------------------------------------
     def removeList(self,toRemove) :
+        ''' remove points in list from offsets - indices are into flattened list '''
     #
-    #
+    # save shape
         shapeSave=self.rgOff.shape
+    # make sure not empty list
         if len(toRemove) <= 0 :
            return
+        # flatten
         rg=self.rgOff.flatten()
         az=self.azOff.flatten()
-
+        # make sure points are in range
         inRange= np.logical_and( toRemove >= 0, toRemove < len(rg) )
-        use=toRemove[inRange]
-        if len(use) > 0 :
-           rg[use]=-2.e9
-           az[use]=-2.e9
+        noUse=toRemove[inRange]
+        # set points in list to no data
+        if len(noUse) > 0 :
+           rg[noUse]=-2.e9
+           az[noUse]=-2.e9
+        # reshape
         self.rgOff=rg.reshape(shapeSave)
         self.azOff=az.reshape(shapeSave)
-        
+        # do the same on match type if exists
         if(len(self.matchType) > 0) :
            m=self.matchType.flatten()
-           m[use]=0
+           m[noUse]=0
            self.matchType=m.reshape(shapeSave)
 #----------------------------------------------------------------------------------------
 # remove offsets as specified by an logical array of same size
@@ -600,6 +617,10 @@ class offsets :
 #----------------------------------------------------------------------------------------
 # write Offsets
 #----------------------------------------------------------------------------------------
+    def printGeos(self,fp) :
+        if self.geo1 != None and self.geo2 != None :
+            print('{0:s} {1:s}'.format(self.geo1,self.geo2),file=fp)
+            
     def writeOffsets(self,fileRoot=None,rangeFile=None,datFile=None) :
         # check names defined
         if len(self.azimuthFile) < 1 or fileRoot != None :
@@ -619,15 +640,18 @@ class offsets :
         if 'azimuth.offsets' not in self.datFile :
             # no azimuth, so output 6 entries
             print(self.r0, self.a0,self.nr,self.na,self.dr,self.da,file=fpDat)
+            self.printGeos(fpDat)
         else :
             # azimuth so output azErr (even if zero)
             print(self.r0, self.a0,self.nr,self.na,self.dr,self.da,self.azErr,file=fpDat) 
+            self.printGeos(fpDat)
         fpDat.close()
         # check if az/range pair so azError treated properly
         if 'azimuth.offsets' in self.datFile :
             # if azimuth, write the range with no azErr
             fpDat=open(datFile.replace('azimuth','range'),'w')
             print(self.r0, self.a0,self.nr,self.na,self.dr,self.da,file=fpDat)
+            self.printGeos(fpDat)
             fpDat.close()
         # otherwise just make a copy
         else :
@@ -647,6 +671,20 @@ class offsets :
 # compute satellite heading
 # this program returns the satellite heading relative to north (in NH) or south (in SH)
 #----------------------------------------------------------------------------------------
+    def computePlaneH(self,x,y,z) :
+    # cull bad
+        good12=z > -1.99e9
+        # flatten XY
+        X=x[good12].flatten()
+        Y=y[good12].flatten()
+        # poly values
+        A=np.array([X*0+1,X,Y]).T
+        # diffs
+        Brg=z[good12].flatten()
+        # compute polynomials
+        coeffXY,rR,rankR,sR=np.linalg.lstsq(A,Brg)
+        return coeffXY         
+            
     def computeHeading(self,fileRoot=None) :
         if len(self.lat) ==0  or len(self.lon) == 0:
             print('Error in offsets.computeHeading : called without latitude loaded')
@@ -671,20 +709,28 @@ class offsets :
                 # for ascending, this will make dlat negative since moving away from South
                 # for descending, this will make dlat positive since moving toward south
                 dlat*=-1
+                mySign=1
         else :
             # for NH, this will make descending +
             if self.geodatrxa.isDescending() :
-               dlat *= -1.0   
-        #median filter
-        self.heading=scipy.signal.medfilt2d((np.arccos(np.clip(dlat/azsp,-1.,1.))),kernel_size=5)
+                dlat *= -1.0  
+                mySign=1.
+            else :
+                mySign=-1.
+        #
+        self.heading=np.arccos(np.clip(dlat/azsp,-1.,1.))
+        #print(np.mean(dlat),azsp)
+        #exit()
+        planeH=self.computePlaneH(self.lat,self.lon,self.heading)    
+        self.heading=mySign*(planeH[0]+planeH[1]*self.lat + planeH[2] * self.lon)
         # compute median and sigma
-        med=np.median(self.heading)
-        sig=np.std(self.heading)
+        #med=np.median(self.heading)
+        #sig=np.std(self.heading)
         # clip to avoid extrem values
-        self.heading=np.clip(self.heading,med-sig,med+sig)
+        #self.heading=np.clip(self.heading,med-sig,med+sig)
         # rotate back to north (this seems to fix cos issue)
         if not self.geodatrxa.isSouth() and self.geodatrxa.isDescending()  :
-            self.heading -= np.pi
+            self.heading += np.pi
         #print(3,dlat[0,0],azsp,self.heading[10,10])
         return self.heading
 

@@ -24,7 +24,7 @@ def makeMaskFromShape(geo,shpfile) :
     ''' 
     #
     # loop through features
-    nx,ny=geo.sizeInPixels()
+    nx,ny=vel.geo.sizeInPixels()
     # create PIL image, which is widthxheight, L indicates 8-bit
     mask=Image.new('L',(nx,ny),1)
     # e.g., < .shp
@@ -44,6 +44,7 @@ def makeMaskFromShape(geo,shpfile) :
         # check it 2D
         if len(xyPoly.shape) == 2 :
             # get image coords for polygon
+            print
             xi,yi=np.rint(geo.xymtoImage(xyPoly[:,0],xyPoly[:,1]))
             # create array of tuple: poly=[ (x1,y1), (x2,y2) ...]
             poly=list(zip(xi,yi))

@@ -17,7 +17,6 @@ def callMyProg(myProg,myInputs=None,myArgs=None,screen=False,logger=None,env=Non
     if logger != None :
         logger.logRunProgram(myProg)
         logger.logLine('\t'+' '.join(myCommand))
-    #print(myCommand)
     if env == None :
         env=os.environ.copy()
     if screen :
