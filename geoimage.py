@@ -15,8 +15,10 @@ from datetime import datetime
 # class defintion for an image object, which covers PS data described by a geodat
 #----------------------------------------------------------------------------------------------------------------------------------------------------
 class geoimage :
+    
     """ \ngeoimage - object for scalar or velocity PS data + geodat data """
     def __init__(self,x=None,vx=None,vy=None,v=None,ex=None,ey=None,e=None,geoType=None,verbose=True) :
+        
         self.x=[]
         self.vx,self.vy,self.v,self.ex,self.ey,self.e=[],[],[],[],[],[]
         #self.xs=self.ys=0
@@ -40,7 +42,8 @@ class geoimage :
         if ey != None :
             self.ey=ey
         if e != None :
-            self.e=e            
+            self.e=e   
+        
         #if xs != None :
         #    self.xs=xs
         #if ys != None :
@@ -76,6 +79,8 @@ class geoimage :
         self.yy=np.arange(y0,y0+sy*dy,dy)
         # force the right length
         self.xx,self.yy=self.xx[0:sx],self.yy[0:sy]   
+        
+
     #--------------------------------------------------------------------------
     # Compute matrix of xy grid points
     #--------------------------------------------------------------------------    
@@ -221,166 +226,269 @@ class geoimage :
         return arr
     
     def getWKT_PROJ(self,epsg_code) :
-        url="http://spatialreference.org/ref/epsg/{0}/prettywkt/".format(epsg_code)
+        #url="http://spatialreference.org/ref/epsg/{0}/prettywkt/".format(epsg_code)
         #response=urllib.request.urlopen(url)
         #remove_spaces =str(response.read()).replace(" ","")
         #output=remove_spaces.replace("\\n","").replace("b\'","").replace("\'","")
-        sr=osr.SpatialReference()
-        sr.ImportFromEPSG(epsg_code)
-        return sr.ExportToWkt()
-        
+        # hard code common ones to avoid problems where defs can't be read by too many jobs at once
+        wktDict={
+            3413 :'PROJCS["WGS 84 / NSIDC Sea Ice Polar Stereographic North",GEOGCS["WGS 84",DATUM["WGS_1984", \
+            SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]], \
+            PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],\
+            AUTHORITY["EPSG","4326"]],PROJECTION["Polar_Stereographic"],PARAMETER["latitude_of_origin",70],\
+            PARAMETER["central_meridian",-45],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],\
+            PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["X",EAST],AXIS["Y",NORTH],AUTHORITY["EPSG","3413"]]',
+            3013 : 'PROJCS["WGS 84 / Antarctic Polar Stereographic",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,\
+            AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],\
+            UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]],PROJECTION["Polar_Stereographic"],\
+            PARAMETER["latitude_of_origin",-71],PARAMETER["central_meridian",0],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],\
+            PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH],AUTHORITY["EPSG","3031"]]'  }   
+        try :
+            wkt=wktDict[epsg_code] 
+        except  :    
+            sr=osr.SpatialReference()
+            sr.ImportFromEPSG(epsg_code)
+            wkt=sr.ExportToWkt()
+        return wkt
     
+    def imageSize(self) :
+        typeDict={'scalar' : self.x, 'velocity' : self.vx,'error': self.ex}
+        ny,nx=typeDict[self.geoType].shape
+        return nx,ny
+    
+    def computePixEdgeCornersXYM(self) :
+        nx,ny=self.imageSize()
+        x0,y0=self.geo.originInM()
+        dx,dy=self.geo.pixSizeInM()
+        xll,yll=x0 - dx/2,y0 - dx/2
+        xur,yur= xll + nx * dx, yll + ny * dy
+        xul,yul=xll,yur
+        xlr,ylr=xur,yll
+        corners={'ll' : {'x' :xll, 'y' : yll},'lr' : {'x' :xlr, 'y' : ylr}, 'ur' : {'x' :xur, 'y' : yur},'ul' : {'x' :xul, 'y' : yul}}
+        return corners
+    
+    def computePixEdgeCornersLL(self) :
+        corners=self.computePixEdgeCornersXYM()
+        llcorners={}
+        for myKey in corners.keys():
+            lat,lon=self.geo.xymtoll(np.array([corners[myKey]['x']]),np.array([corners[myKey]['y']]))
+            llcorners[myKey]={'lat' : lat[0],'lon' : lon[0]}
+        return llcorners
+        
     #--------------------------------------------------------------------------
     # write My Tiff 
     #--------------------------------------------------------------------------
-    def writeMyTiff(self,tiffFile,epsg=None,noDataDefault=None,predictor=1) :
+    def writeMyTiff(self,tiffFile,epsg=None,noDataDefault=None,predictor=1,noV=False,overviews=None) :
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note : tiffFile should not have a ".tif" extension - one will be added.        
         """
         # define various set up stuff
         suffixDict={'scalar' : [''], 'velocity' : ['.vx','.vy','.v'], 'error' : ['.ex','.ey']}
-        noDataDict={'.vx' : -2.0e9 , '.vy' : -2.0e9,'.v' : -1.0, '.ex' : -1.0, '.ey' : -1.0,'' : noDataDefault}
         typeDict={'scalar' : self.x, 'velocity' : self.vx,'error': self.ex}
-        predictor=int(predictor)
-        if predictor > 3 or predictor < 1 :
-            predictor=1
-        # Default to greenland
-        if epsg == None :
-            epsg=3413
+        predictor=[int(predictor),1][predictor > 3 or predictor < 1]
+        epsg=[epsg,3413][epsg == None]
         try :
             suffixes=suffixDict[self.geoType]
-            gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(typeDict[self.geoType].dtype)
-            ny,nx=typeDict[self.geoType].shape
+            gdalType=gdal_array.NumericTypeCodeToGDALTypeCode(typeDict[self.geoType].dtype) 
         except :
             myerror('writeMyTiff: invalide geoType '+self.geoType)
         #     
         try :      
-            # compute and set geotransform data
-            x0,y0=self.geo.originInM()
-            dx,dy=self.geo.pixSizeInM()
-            xur,yur=x0 - dx/2, y0 - dx/2 + ny * dy
-            wkt=self.getWKT_PROJ(epsg)
-            wkt=wkt.replace(',AUTHORITY["EPSG","'+str(epsg)+'"]','')
-            #
             # Loop through different components, also write vmag for velocity
-            #
             for suffix in suffixes :
-                # setup geotiff
-                driver=gdal.GetDriverByName( "GTiff")
-                dst_ds=driver.Create(tiffFile+suffix+'.tif',nx,ny,1,gdalType,['COMPRESS=LZW','PREDICTOR={0:d}'.format(predictor),'TILED=YES'] )
-                dst_ds.SetGeoTransform((xur,dx,0,yur,0,-dy))
-                dst_ds.SetProjection(wkt)
-                # set nodata
-                noData=noDataDict[suffix]
-                if noData != None :
-                    if self.geoType=='scalar' :
-                        tmp=self.x
-                    else :
-                        tmp=eval('self'+suffix)
-                    tmp[np.isnan(tmp)]=noData
-                # write data 
-                if self.geoType == 'scalar' :
-                    dst_ds.GetRasterBand(1).WriteArray(np.flipud(self.x))
-                else :
-                    dst_ds.GetRasterBand(1).WriteArray(np.flipud(eval('self'+suffix)))
-                # set no data value in tif
-                if noData != None :
-                    dst_ds.GetRasterBand(1).SetNoDataValue(noData)
-                dst_ds.FlushCache()
-                dst_ds=None
+                # skip .v if requested
+                if noV and suffix == '.v' :
+                    continue
+                # write the geotiff
+                self.writeCloudOptGeo(tiffFile,suffix,epsg,gdalType,overviews=overviews,predictor=predictor,noDataDefault=noDataDefault)
         except :
             myerror("geoimage.writeMyTiff - : error writing tiff file "+tiffFile)
-    
-
-    #--------------------------------------------------------------------------
-    # read geo image data
-    #--------------------------------------------------------------------------
-    def readData(self,fileName,geoType=None,geoFile=None,dType=None,tiff=None,epsg=None) :
-        """ read Data for geo image 
-        fileName=filename (or basename if velocity )
-        geoType =specify read 'velocity' or 'scalar' data
-        geoFile=geodatfile [fileName(.vx).geodat]
-        dType=type for scalar ['>f4']   ( 'f4','>f4','>u2','u2','u1','>i2','i2','>u4','u4','>i4','i4')"""
-        # default assume byteswapped float
-        if dType == None :
-            dType='>f4'
-        if tiff == None :
-            tiff=False
+            
+            
+    def writeCloudOptGeo(self,tiffFile,suffix,epsg,gdalType,overviews=None,predictor=1,noDataDefault=None) :
+        ''' write a cloudoptimized geotiff with overviews'''
+        # no data info
+        noDataDict={'.vx' : -2.0e9 , '.vy' : -2.0e9,'.v' : -1.0, '.ex' : -1.0, '.ey' : -1.0,'' : noDataDefault}
         #
-        # error check type
-        if geoType != None :
-            self.setGeoType(geoType)
+        # use a temp mem driver for CO geo
+        driver=gdal.GetDriverByName( "MEM")
+        nx,ny=self.imageSize()
+        dx,dy=self.geo.pixSizeInM()
+        dst_ds=driver.Create('',nx,ny,1,gdalType )
+        # set geometry
+        tiffCorners=self.computePixEdgeCornersXYM()
+        dst_ds.SetGeoTransform((tiffCorners['ul']['x'],dx,0,tiffCorners['ul']['y'],0,-dy))
+        #set projection
+        wkt=self.getWKT_PROJ(epsg)
+        dst_ds.SetProjection(wkt)
+        # this seems to force writing full wkt
+        #dst_ds.FlushCache()
+        # set nodata
+        noData=noDataDict[suffix]
+        if noData != None :
+            if self.geoType=='scalar' :
+                tmp=self.x
+            else :
+                tmp=eval('self'+suffix)
+            tmp[np.isnan(tmp)]=noData
+            dst_ds.GetRasterBand(1).SetNoDataValue(noData)
+        # write data 
+        if self.geoType == 'scalar' :
+            dst_ds.GetRasterBand(1).WriteArray(np.flipud(self.x))
+        else :
+            dst_ds.GetRasterBand(1).WriteArray(np.flipud(eval('self'+suffix)))
         #
-        # read geodat
-        #
+        if overviews != None :
+            dst_ds.BuildOverviews('AVERAGE',overviews)
+        # now copy to a geotiff - mem -> geotiff forces correct order for c opt geotiff
+        dst_ds.FlushCache()
+        driver=gdal.GetDriverByName( "GTiff")
+        dst_ds2=driver.CreateCopy(tiffFile+suffix+'.tif',dst_ds,options=['COPY_SRC_OVERVIEWS=YES','COMPRESS=LZW',f'PREDICTOR={predictor}','TILED=YES'] )
+        dst_ds=None
+        dst_ds2.FlushCache()
+        # free memory
+        dst_ds,dst_ds2=None,None
+        
+    def getDomain(self,epsg) :
         if epsg==None or epsg == 3413 :
             domain='greenland'
         elif epsg == 3031 :
             domain='antarctica'
         else :
             myerror('Unexpected epsg code : '+str(epsg))
-        self.geo=geodat(verbose=self.verbose,domain=domain)            
+        return domain
+    
+    def getGeoFile(self,fileName,domain,vxMod=None,geoFile=None,tiff=False) :
+        ''' determine the file name for geodat if not specified and load geodat info'''
+        if not tiff :
+            suffixes={'scalar' : '.geodat', 'velocity' : '.vx.geodat','error' : '.vx.geodat' } 
+        else :
+            suffixes={'scalar' : '', 'velocity' : '.vx.tif' ,'error' : '.vx.tif' } 
+            if vxMod != None :
+                suffixes['error']=vxMod
+                suffixes['velocity']=vxMod
+        #
         if geoFile == None :
-            if self.geoType == 'scalar' :
-                if not tiff :
-                    geoFile=fileName+'.geodat'
-                else :
-                    # assume for scalar, tif file name is given
-                    geoFile=fileName
-            elif self.geoType == 'velocity' or self.geoType == 'error':
-                if not tiff :
-                    geoFile=fileName+'.vx.geodat'
-                else :
-                    geoFile=fileName+'.vx.tif'
-            else :
-                myerror("geoimage.readData: Invalid type ")
+            try :
+                geoFile=fileName+suffixes[self.geoType]
+            except :
+                myerror("geoimage.readData: Invalid type {self.geoType} ")
+        #
+        self.geo=geodat(verbose=self.verbose,domain=domain)    
         if not tiff :
             self.geo.readGeodat(geoFile)
         else :
             self.geo.readGeodatFromTiff(geoFile)
+        return geoFile
+    
+    
+    def dataFileNames(self,fileName,tiff=None,vxMod=None) :
+        ''' compute the file names that need to be read'''
+        if not tiff :
+            suffixes={'scalar' : [''], 'velocity' : ['.vx','.vy'],'error' : ['.ex','.ey'] }[self.geoType]
+        else :
+            suffixes={'scalar' : [''], 'velocity' : ['.vx.tif','.vy.tif'],'error' : ['.ex.tif','ey.tif'] }[self.geoType] 
+            # if vxMod present, use it update the name
+            if vxMod != None and self.geoType != 'scalar' :
+                for i,component in zip([0,1],['x','y']):
+                    vMod=vxMod.replace('x',component)
+                    # v -> e for errors
+                    if self.geoType == 'error' :
+                        vMod.replace('v','e')
+                    # replace the standard value with this updated vMod
+                    suffixes[i]=suffixes[i].replace(suffixes[i],vMod)
+        # now use file root to create file names
+        fileNames=[]
+        for suffix in suffixes :
+            fileNames.append(fileName+suffix)
+#        print(fileNames)
+        return fileNames
+        
+    def readFiles(self,fileNames,dType,tiff=False) :
+        #  get the values that match the type
+        myTypes={'scalar' : ['x'],'velocity' : ['vx','vy'], 'error' : ['ex','ey']}[self.geoType]
+        #noData={'scalar' : -2.e9,'velocity' : -2.e9,'error' : -2.e9}[self.geoType]
+        minValue={'scalar' : -2.e9,'velocity' : -2.e9,'error' : -2.e9}[self.geoType]
+        sx,sy=self.geo.sizeInPixels()
+        # loop over arrays and file names to read data
+        for myType, fileName in zip(myTypes,fileNames) :
+            if not tiff :
+                myArray=readImage(fileName,sx,sy,dType)
+            else :
+                myArray=self.readMyTiff(fileName)
+            # handle no data
+            myArray[np.isnan(myArray)]=np.nan
+            myArray[myArray <=minValue]=np.nan
+            exec(f'self.{myType}=myArray')
+        #
+        # compute mag for velocity and errors
+        if self.geoType == 'velocity' :
+            self.v=np.sqrt(np.square(self.vx) + np.square(self.vy))
+        elif self.geoType == 'error' :
+            self.e=np.sqrt(np.square(self.ex) + np.square(self.ey))
+            
+    #--------------------------------------------------------------------------
+    # read geo image data
+    #--------------------------------------------------------------------------
+    def readData(self,fileName,geoType=None,geoFile=None,dType='>f4',tiff=False,epsg=None,vxMod=None) :
+        """ read Data for geo image 
+        fileName=filename (or basename if velocity )
+        geoType =specify read 'velocity' or 'scalar' data
+        geoFile=geodatfile [fileName(.vx).geodat]
+        dType=type for scalar ['>f4']   ( 'f4','>f4','>u2','u2','u1','>i2','i2','>u4','u4','>i4','i4')"""    
+        #
+        # error check type
+        if geoType != None :
+            self.setGeoType(geoType)
+        #
+        # read geodat
+        domain=self.getDomain(epsg) 
+        geoFile=self.getGeoFile(fileName,domain,geoFile=geoFile,tiff=tiff,vxMod=vxMod)
         # compute coordinates for data
         self.xyCoordinates()
         # get size
         sx,sy=self.geo.sizeInPixels()
         #
-        # read image (set no data to nan)
-        #
-        if self.geoType == 'scalar' :
-            if tiff :
-                self.x=self.readMyTiff(fileName)
-            else :
-                self.x=readImage(fileName,sx,sy,dType)
-                if 'f' in dType :
-                    missing=self.x <=(-2.0e9+1)
-                    if len(missing) > 0 :
-                        self.x[missing]=np.nan
-        elif self.geoType == 'velocity' :
-            self.fileName=fileName
-            if tiff :
-                self.vx=self.readMyTiff(fileName+'.vx.tif')
-                self.vy=self.readMyTiff(fileName+'.vy.tif')
-            else :
-                self.vx=readImage(fileName+'.vx',sx,sy,'>f4')
-                self.vy=readImage(fileName+'.vy',sx,sy,'>f4')
-            missing=[]
-            self.vx[np.isnan(self.vx)]=-2.0e9
-            missing=self.vx <=(-99998)
-            if len(missing) > 0 :
-                self.vx[missing]=np.nan
-                self.vy[missing]=np.nan
-            self.v=np.sqrt(np.square(self.vx) + np.square(self.vy))
-        elif self.geoType == 'error' :
-            if tiff :
-                self.ex=self.readMyTiff(fileName+'.ex.tif')
-                self.ey=self.readMyTiff(fileName+'.ey.tif')
-            else :
-                self.ex=readImage(fileName+'.ex',sx,sy,'>f4')
-                self.ey=readImage(fileName+'.ey',sx,sy,'>f4')
-            missing=self.ey <=(-99998)
-            if len(missing) > 0 :
-                self.ey[missing]=np.nan
-                self.ex[missing]=np.nan            
-            self.e=np.sqrt(np.square(self.ex) + np.square(self.ey))            
+        # read image (set no data to nan)  
+        fileNames=self.dataFileNames(fileName,tiff=tiff,vxMod=vxMod)
+        self.readFiles(fileNames,dType,tiff=tiff)
+        #exit()
+#        if self.geoType == 'scalar' :
+#            if tiff :
+#                self.x=self.readMyTiff(fileName)
+#            else :
+#                self.x=readImage(fileName,sx,sy,dType)
+#                if 'f' in dType :
+#                    missing=self.x <=(-2.0e9+1)
+#                    if len(missing) > 0 :
+#                        self.x[missing]=np.nan
+#        elif self.geoType == 'velocity' :
+#            self.fileName=fileName
+#            if tiff :
+#                self.vx=self.readMyTiff(fileName+'.vx.tif')
+#                self.vy=self.readMyTiff(fileName+'.vy.tif')
+#            else :
+#                self.vx=readImage(fileName+'.vx',sx,sy,'>f4')
+#                self.vy=readImage(fileName+'.vy',sx,sy,'>f4')
+#            missing=[]
+#            self.vx[np.isnan(self.vx)]=-2.0e9
+#            missing=self.vx <=(-99998)
+#            if len(missing) > 0 :
+#                self.vx[missing]=np.nan
+#                self.vy[missing]=np.nan
+#            self.v=np.sqrt(np.square(self.vx) + np.square(self.vy))
+#        elif self.geoType == 'error' :
+#            if tiff :
+#                self.ex=self.readMyTiff(fileName+'.ex.tif')
+#                self.ey=self.readMyTiff(fileName+'.ey.tif')
+#            else :
+#                self.ex=readImage(fileName+'.ex',sx,sy,'>f4')
+#                self.ey=readImage(fileName+'.ey',sx,sy,'>f4')
+#            missing=self.ey <=(-99998)
+#            if len(missing) > 0 :
+#                self.ey[missing]=np.nan
+#                self.ex[missing]=np.nan            
+#            self.e=np.sqrt(np.square(self.ex) + np.square(self.ey))            
 
 
 #--------------------------------------------------------------------------

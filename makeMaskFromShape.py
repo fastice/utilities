@@ -24,7 +24,7 @@ def makeMaskFromShape(geo,shpfile) :
     ''' 
     #
     # loop through features
-    nx,ny=vel.geo.sizeInPixels()
+    nx,ny=geo.sizeInPixels()
     # create PIL image, which is widthxheight, L indicates 8-bit
     mask=Image.new('L',(nx,ny),1)
     # e.g., < .shp
