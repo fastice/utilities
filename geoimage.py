@@ -44,10 +44,6 @@ class geoimage :
         if e != None :
             self.e=e   
         
-        #if xs != None :
-        #    self.xs=xs
-        #if ys != None :
-        #    self.ys=ys
         self.verbose=verbose
         if geoType != None :
             self.geoType=geoType
@@ -442,82 +438,39 @@ class geoimage :
             self.setGeoType(geoType)
         #
         # read geodat
-        domain=self.getDomain(epsg) 
-        geoFile=self.getGeoFile(fileName,domain,geoFile=geoFile,tiff=tiff,vxMod=vxMod)
+        geoFile=self.getGeoFile(fileName,self.getDomain(epsg) ,geoFile=geoFile,tiff=tiff,vxMod=vxMod)
         # compute coordinates for data
         self.xyCoordinates()
         # get size
         sx,sy=self.geo.sizeInPixels()
-        #
         # read image (set no data to nan)  
         fileNames=self.dataFileNames(fileName,tiff=tiff,vxMod=vxMod)
         self.readFiles(fileNames,dType,tiff=tiff)
-        #exit()
-#        if self.geoType == 'scalar' :
-#            if tiff :
-#                self.x=self.readMyTiff(fileName)
-#            else :
-#                self.x=readImage(fileName,sx,sy,dType)
-#                if 'f' in dType :
-#                    missing=self.x <=(-2.0e9+1)
-#                    if len(missing) > 0 :
-#                        self.x[missing]=np.nan
-#        elif self.geoType == 'velocity' :
-#            self.fileName=fileName
-#            if tiff :
-#                self.vx=self.readMyTiff(fileName+'.vx.tif')
-#                self.vy=self.readMyTiff(fileName+'.vy.tif')
-#            else :
-#                self.vx=readImage(fileName+'.vx',sx,sy,'>f4')
-#                self.vy=readImage(fileName+'.vy',sx,sy,'>f4')
-#            missing=[]
-#            self.vx[np.isnan(self.vx)]=-2.0e9
-#            missing=self.vx <=(-99998)
-#            if len(missing) > 0 :
-#                self.vx[missing]=np.nan
-#                self.vy[missing]=np.nan
-#            self.v=np.sqrt(np.square(self.vx) + np.square(self.vy))
-#        elif self.geoType == 'error' :
-#            if tiff :
-#                self.ex=self.readMyTiff(fileName+'.ex.tif')
-#                self.ey=self.readMyTiff(fileName+'.ey.tif')
-#            else :
-#                self.ex=readImage(fileName+'.ex',sx,sy,'>f4')
-#                self.ey=readImage(fileName+'.ey',sx,sy,'>f4')
-#            missing=self.ey <=(-99998)
-#            if len(missing) > 0 :
-#                self.ey[missing]=np.nan
-#                self.ex[missing]=np.nan            
-#            self.e=np.sqrt(np.square(self.ex) + np.square(self.ey))            
-
-
+      
 #--------------------------------------------------------------------------
 # read geo image data
 #--------------------------------------------------------------------------
-    def writeData(self,fileName,geoType=None,geoFile=None,dType=None) :
+    def writeData(self,fileName,geoType=None,geoFile=None,dType='>f4') :
         """ read Data for geo image 
         fileName=filename (or basename if velocity )
         geoType =specify read 'velocity' or 'scalar' data
         geoFile=geodatfile [fileName(.vx).geodat]
         dType=type for scalar ['>f4']   ( 'f4','>f4','>u2','u2','>i2','i2','>u4','u4','>i4','i4')"""
-        # default assume byteswapped float
-        if dType == None :
-            dType='>f4'
         #
-        # error check type
+        # force type change
         if geoType != None :
             self.setGeoType(geoType)
         #
         # write geodat, with suffix from this dict of possible types
-        suffix={'scalar' : '.geodat', 'velocity' : '.vx.geodat', 'error' : '.ex.geodat' }
+        suffix={'scalar' : 'geodat', 'velocity' : 'vx.geodat', 'error' : 'ex.geodat' }
         if geoFile == None :
-            geoFile=fileName+suffix[self.geoType]
+            geoFile=f'{fileName}.{suffix[self.geoType]}'
         #
         # helper to write image (set no data to nan)
         def writeMyImage(myGeo,NaNVal, x,fileName,dType) :
-            x[np.isnan(x)]=-2.e9
+            x[np.isnan(x)]=NaNVal
             writeImage(fileName,x,dType)
-            myGeo.writeGeodat(fileName+'.geodat')
+            myGeo.writeGeodat(f'{fileName}.geodat')
         #   
         # Use above funtion to write image for different types
         if self.geoType == 'scalar' :
