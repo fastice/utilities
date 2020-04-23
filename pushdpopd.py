@@ -3,8 +3,21 @@
 import os
 
 __dirstack = []
-	
+
+
 def pushd(directory=None):
+    '''
+    Pushd (cd) to such that popd() returns to the original point.
+    Should call with a directory
+    Parameters
+    ----------
+    directory : directory path, optional
+        Not really optional. The default is None.
+    Returns
+    -------
+    None.
+
+    '''
     if directory:
         try:
             curdir = os.getcwd()
@@ -23,10 +36,15 @@ def pushd(directory=None):
             __dirstack.append(os.getcwd())
             os.chdir(top)
 
-	
+
 def popd():
+    '''
+    Return to original directory after a pushd command.
+    Returns
+    -------
+    None.
+    '''
     try:
         os.chdir(__dirstack.pop())
     except IndexError:
         print("popd: Directory stack empty.")
-            
