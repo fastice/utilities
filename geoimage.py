@@ -6,7 +6,7 @@ from utilities.writeImage import writeImage
 from utilities.myerror import myerror
 from utilities import geodat
 import os
-from osgeo.gdalconst import *
+# from osgeo.gdalconst import *
 from osgeo import gdal, gdal_array, osr
 from datetime import datetime
 
@@ -87,7 +87,7 @@ class geoimage:
         if len(self.xx) == 0:
             self.xyCoordinates()
         sx, sy = self.geo.sizeInPixels()
-        # 
+        #
         # setup array
         self.xGrid, self.yGrid = np.zeros((sy, sx)), np.zeros((sy, sx))
         for i in range(0, sy):
@@ -268,6 +268,7 @@ class geoimage:
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note: tiffFile should not have a ".tif" extension - one will be
             added.
+            overviews should be of form [2, 4...]
         """
         # define various set up stuff
         suffixDict = {'scalar': [''], 'velocity': ['.vx', '.vy', '.v'],
@@ -332,6 +333,8 @@ class geoimage:
             dst_ds.GetRasterBand(1).WriteArray(np.flipud(eval('self'+suffix)))
         #
         if overviews is not None:
+            if len(overviews) < 2:
+                myerror(f'Overviews {overviews} must be of form [2, 4, ..])')
             dst_ds.BuildOverviews('AVERAGE', overviews)
         # now copy to a geotiff - mem -> geotiff forces correct order
         # for c opt geotiff
@@ -343,7 +346,6 @@ class geoimage:
                                              'COMPRESS=LZW',
                                              f'PREDICTOR={predictor}',
                                              'TILED=YES'])
-        dst_ds = None
         dst_ds2.FlushCache()
         # free memory
         dst_ds, dst_ds2 = None, None
@@ -393,7 +395,7 @@ class geoimage:
                         'error': ['.ex', '.ey']}[self.geoType]
         else:
             suffixes = {'scalar': [''], 'velocity': ['.vx.tif', '.vy.tif'],
-                        'error': ['.ex.tif', 'ey.tif']}[self.geoType]
+                        'error': ['.ex.tif', '.ey.tif']}[self.geoType]
             # if vxMod present, use it update the name
             if vxMod is not None and self.geoType != 'scalar':
                 for i, component in zip([0, 1], ['x', 'y']):
