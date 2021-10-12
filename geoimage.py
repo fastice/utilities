@@ -77,6 +77,7 @@ class geoimage:
         self.yy = np.arange(y0, y0+sy*dy, dy)
         # force the right length
         self.xx, self.yy = self.xx[0:sx], self.yy[0:sy]
+        self.extent = [min(self.xx), max(self.xx), min(self.yy), max(self.yy)]
 
     # -------------------------------------------------------------------------
     # Compute matrix of xy grid points
@@ -123,7 +124,7 @@ class geoimage:
     #  setup interpolation functions
     # -------------------------------------------------------------------------
 
-    def setupInterp(self):
+    def setupInterp(self, method='linear'):
         """ set up interpolation for scalar (xInterp) or velocity/eror
         (vxInterp, vyInterp, vInterp)  """
     #
@@ -136,19 +137,19 @@ class geoimage:
 
         if self.geoType == 'scalar':
             self.xInterp = RegularGridInterpolator(xy,
-                                                   self.x, method='linear')
+                                                   self.x, method=method)
         if self.geoType == 'velocity':
             self.vxInterp = RegularGridInterpolator(xy,
-                                                    self.vx, method='linear')
+                                                    self.vx, method=method)
             self.vyInterp = RegularGridInterpolator(xy,
-                                                    self.vy, method='linear')
-            self.vInterp = RegularGridInterpolator(xy, self.v, method='linear')
+                                                    self.vy, method=method)
+            self.vInterp = RegularGridInterpolator(xy, self.v, method=method)
         if self.geoType == 'error':
             self.exInterp = RegularGridInterpolator(xy,
-                                                    self.ex, method='linear')
+                                                    self.ex, method=method)
             self.eyInterp = RegularGridInterpolator(xy,
-                                                    self.ey, method='linear')
-            self.eInterp = RegularGridInterpolator(xy, self.e, method='linear')
+                                                    self.ey, method=method)
+            self.eInterp = RegularGridInterpolator(xy, self.e, method=method)
 
     # -------------------------------------------------------------------------
     # interpolate geo image
@@ -226,12 +227,22 @@ class geoimage:
             myerror("geoimage.readMyTiff: error reading tiff file "+tiffFile)
         return arr
 
-    def getWKT_PROJ(self, epsg_code):
+    def getWKT_PROJ(self, epsgCode, wktFile):
         ''' get wkt'''
-        sr = osr.SpatialReference()
-        sr.ImportFromEPSG(epsg_code)
-        wkt = sr.ExportToWkt()
+        if epsgCode is None and wktFile is None:
+            return None
+        if wktFile is not None:
+             wkt = self.readWKT(wktFile)
+        else:
+            sr = osr.SpatialReference()
+            sr.ImportFromEPSG(epsgCode)
+            wkt = sr.ExportToWkt()
         return wkt
+
+    def readWKT(self, wktFile):
+        ''' get wkt from a file '''
+        with open(wktFile, 'r') as fp:
+            return fp.readline()
 
     def imageSize(self):
         typeDict = {'scalar': self.x, 'velocity': self.vx, 'error': self.ex}
@@ -242,6 +253,7 @@ class geoimage:
         nx, ny = self.imageSize()
         x0, y0 = self.geo.originInM()
         dx, dy = self.geo.pixSizeInM()
+        # print(x0, y0, nx, ny, dx, dy)
         xll, yll = x0 - dx/2, y0 - dx/2
         xur, yur = xll + nx * dx, yll + ny * dy
         xul, yul = xll, yur
@@ -263,8 +275,11 @@ class geoimage:
     # write My Tiff
     # ------------------------------------------------------------------------
 
+
+
     def writeMyTiff(self, tiffFile, epsg=None, noDataDefault=None,
-                    predictor=1, noV=False, overviews=None):
+                    predictor='YES', noV=False, overviews=None,
+                    driverName='COG', wktFile=None, computeStats=True):
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note: tiffFile should not have a ".tif" extension - one will be
             added.
@@ -274,14 +289,15 @@ class geoimage:
         suffixDict = {'scalar': [''], 'velocity': ['.vx', '.vy', '.v'],
                       'error': ['.ex', '.ey']}
         typeDict = {'scalar': self.x, 'velocity': self.vx, 'error': self.ex}
-        predictor = [int(predictor), 1][predictor > 3 or predictor < 1]
-        epsg = [epsg, 3413][epsg is None]
+        # predictor = [int(predictor), 1][predictor > 3 or predictor < 1]
+        if wktFile is None:
+            epsg = [epsg, 3413][epsg is None]
         try:
             suffixes = suffixDict[self.geoType]
             gdalType = gdal_array.NumericTypeCodeToGDALTypeCode(
                 typeDict[self.geoType].dtype)
         except Exception:
-            myerror('writeMyTiff: invalide geoType '+self.geoType)
+            myerror('writeMyTiff: invalid geoType ' + self.geoType)
         #
         try:
             # Loop through different components, also write vmag for velocity
@@ -292,16 +308,24 @@ class geoimage:
                 # write the geotiff
                 self.writeCloudOptGeo(tiffFile, suffix, epsg, gdalType,
                                       overviews=overviews, predictor=predictor,
-                                      noDataDefault=noDataDefault)
+                                      noDataDefault=noDataDefault,
+                                      driverName=driverName, wktFile=wktFile,
+                                      computeStats=computeStats)
         except Exception:
             myerror(f"geoimage.writeMyTiff: error writing file {tiffFile}")
 
     def writeCloudOptGeo(self, tiffFile, suffix, epsg, gdalType,
-                         overviews=None, predictor=1, noDataDefault=None):
-        ''' write a cloudoptimized geotiff with overviews'''
+                         overviews=None, predictor='YES', noDataDefault=None,
+                         bigTiff=False, driverName='COG', wktFile=None,
+                         computeStats=True):
+        ''' write a cloudoptimized geotiff with overviews.
+        Set format to GTiff for a plain geotiff '''
+
+        if driverName not in ['COG', 'GTiff']:
+            myerror(f'invalid driver for writeCloudOptGeo {driverName}')
         # no data info
-        noDataDict = {'.vx': -2.0e9, '.vy': -2.0e9, '.v': -1.0,
-                      '.ex': -1.0, '.ey': -1.0, '': noDataDefault}
+        noData = {'.vx': -2.0e9, '.vy': -2.0e9, '.v': -1.0,
+                  '.ex': -1.0, '.ey': -1.0, '': noDataDefault}[suffix]
         #
         # use a temp mem driver for CO geo
         driver = gdal.GetDriverByName("MEM")
@@ -313,39 +337,51 @@ class geoimage:
         dst_ds.SetGeoTransform((tiffCorners['ul']['x'], dx, 0,
                                 tiffCorners['ul']['y'], 0, -dy))
         # set projection
-        wkt = self.getWKT_PROJ(epsg)
+        wkt = self.getWKT_PROJ(epsg, wktFile)
+        #
         dst_ds.SetProjection(wkt)
-        # this seems to force writing full wkt
-        # dst_ds.FlushCache()
         # set nodata
-        noData = noDataDict[suffix]
         if noData is not None:
             if self.geoType == 'scalar':
                 tmp = self.x
-            else:
-                tmp = eval('self'+suffix)
+            else:  # vx, vy etc
+                tmp = getattr(self, suffix.replace('.', ''))
             tmp[np.isnan(tmp)] = noData
             dst_ds.GetRasterBand(1).SetNoDataValue(noData)
         # write data
         if self.geoType == 'scalar':
             dst_ds.GetRasterBand(1).WriteArray(np.flipud(self.x))
         else:
-            dst_ds.GetRasterBand(1).WriteArray(np.flipud(eval('self'+suffix)))
+            dst_ds.GetRasterBand(1).WriteArray(
+                np.flipud(getattr(self, suffix.replace('.', ''))))
+        # compute statistics, which should embed in file.
+        if computeStats:
+            _ = dst_ds.GetRasterBand(1).GetStatistics(0, 1)
         #
-        if overviews is not None:
-            if len(overviews) < 2:
-                myerror(f'Overviews {overviews} must be of form [2, 4, ..])')
-            dst_ds.BuildOverviews('AVERAGE', overviews)
+        bigTiffFlag = ["NO", "YES"][bigTiff]
+        options = [f'BIGTIFF={bigTiffFlag}', 'COMPRESS=LZW']
+        # driver specific stuff
+        if driverName == 'GTiff':  # GTiff options
+            if type(predictor) != int and predictor is not None:
+                options.append(f'PREDICTOR={1}')
+            if overviews is not None:
+                if len(overviews) < 2:
+                    myerror(f'Overviews {overviews} should be [2, 4, ..])')
+                options.append('COPY_SRC_OVERVIEWS=YES')
+                dst_ds.BuildOverviews('AVERAGE', overviews)
+        else:  # COG OPTIONS
+            options.append('GEOTIFF_VERSION=1.1')
+            options.append('GEOTIFF_VERSION=1.1')
+            if predictor in ['YES', 'NO']:
+                options.append(f'PREDICTOR={predictor}')
+        #
         # now copy to a geotiff - mem -> geotiff forces correct order
         # for c opt geotiff
         dst_ds.FlushCache()
-        driver = gdal.GetDriverByName("GTiff")
+        driver = gdal.GetDriverByName(driverName)
+        # Create copy for the COG.
         dst_ds2 = driver.CreateCopy(f'{tiffFile}{suffix}.tif', dst_ds,
-                                    options=['COPY_SRC_OVERVIEWS=YES',
-                                             'BIGTIFF=YES',
-                                             'COMPRESS=LZW',
-                                             f'PREDICTOR={predictor}',
-                                             'TILED=YES'])
+                                    options=options)
         dst_ds2.FlushCache()
         # free memory
         dst_ds, dst_ds2 = None, None
@@ -356,11 +392,11 @@ class geoimage:
         elif epsg == 3031:
             domain = 'antarctica'
         else:
-            myerror('Unexpected epsg code: '+str(epsg))
+            myerror('Unexpected epsg code: ' + str(epsg))
         return domain
 
     def getGeoFile(self, fileName, domain, vxMod=None, geoFile=None,
-                   tiff=False):
+                   tiff=False, wkt=None):
         ''' determine the file name for geodat if not specified and
         load geodat info'''
         if not tiff:
@@ -375,11 +411,11 @@ class geoimage:
         #
         if geoFile is None:
             try:
-                geoFile = fileName+suffixes[self.geoType]
+                geoFile = fileName + suffixes[self.geoType]
             except Exception:
-                myerror("geoimage.readData: Invalid type {self.geoType} ")
+                myerror(f"geoimage.getGeoFile: Invalid type {self.geoType} ")
         #
-        self.geo = geodat(verbose=self.verbose, domain=domain)
+        self.geo = geodat(verbose=self.verbose, domain=domain, wkt=wkt)
         if not tiff:
             self.geo.readGeodat(geoFile)
         else:
@@ -422,19 +458,22 @@ class geoimage:
         # loop over arrays and file names to read data
         for myType, fileName in zip(myTypes, fileNames):
             if not tiff:
+                # print(fileName, sx, sy, dType)
                 myArray = readImage(fileName, sx, sy, dType)
             else:
                 myArray = self.readMyTiff(fileName)
             # handle no data nans if present
             if np.sum(np.isnan(myArray)) > 0:
                 myArray[np.isnan(myArray)] = np.nan
-            if isinstance(myArray[0, 0], np.floating):
+            elif isinstance(myArray[0, 0], np.floating):
+                # print(minValue)
                 myArray[myArray <= minValue] = np.nan
             exec(f'self.{myType}=myArray')
         #
         # compute mag for velocity and errors
         if self.geoType == 'velocity':
-            self.v = np.sqrt(np.square(self.vx) + np.square(self.vy))
+            self.v = np.sqrt(np.square(self.vx.astype(float)) +
+                             np.square(self.vy.astype(float)))
         elif self.geoType == 'error':
             self.e = np.sqrt(np.square(self.ex) + np.square(self.ey))
 
@@ -442,7 +481,7 @@ class geoimage:
     # read geo image data
     # -------------------------------------------------------------------------
     def readData(self, fileName, geoType=None, geoFile=None, dType='>f4',
-                 tiff=False, epsg=None, vxMod=None):
+                 tiff=False, epsg=None, vxMod=None, wktFile=None):
         """ read Data for geo image
         fileName=filename (or basename if velocity )
         geoType =specify read 'velocity' or 'scalar' data
@@ -455,7 +494,8 @@ class geoimage:
             self.setGeoType(geoType)
         #
         # read geodat
-        geoFile = self.getGeoFile(fileName, self.getDomain(epsg),
+        wkt = self.getWKT_PROJ(epsg, wktFile)
+        geoFile = self.getGeoFile(fileName, self.getDomain(epsg), wkt=wkt,
                                   geoFile=geoFile, tiff=tiff, vxMod=vxMod)
         # compute coordinates for data
         self.xyCoordinates()
@@ -463,6 +503,7 @@ class geoimage:
         sx, sy = self.geo.sizeInPixels()
         # read image (set no data to nan)
         fileNames = self.dataFileNames(fileName, tiff=tiff, vxMod=vxMod)
+        # print(fileNames)
         self.readFiles(fileNames, dType, tiff=tiff)
 
 # -------------------------------------------------------------------------

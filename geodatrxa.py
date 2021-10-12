@@ -35,6 +35,7 @@ class geodatrxa:
         self.position = self.velocity = []
         self.ecef = pyproj.Proj(proj='geocent', ellps='WGS84', datum='WGS84')
         self.llz = pyproj.Proj(proj='latlong', ellps='WGS84', datum='WGS84')
+        self.llzToEcef = pyproj.Transformer.from_proj(self.llz, self.ecef)
         self.minT, self.maxT = -1, -1
         self.fx, self.fy, self.fz, self.fvx, self.fvy, self.fvz = [None]*6
         # in most cases all or no args would be passe.
@@ -343,8 +344,9 @@ class geodatrxa:
 
     def lltoecef(self, lat, lon, zelev):
         ''' convert llz to ecef'''
-        return pyproj.transform(self.llz, self.ecef, lon, lat, zelev,
-                                radians=False)
+    #    return pyproj.transform(self.llz, self.ecef, lon, lat, zelev,
+    #                            radians=False)
+        return self.llzToEcef.transform(lat, lon, zelev, radians=False)
 
     def ReH(self, myTime):
         sPt = np.array(self.interpPos(myTime))
@@ -373,5 +375,5 @@ class geodatrxa:
         # correct to near range for multi-look,  the sub
         r = (np.sqrt(np.dot(dr, dr)) - self.rNearSLP)/self.slpRg
         az = (myTime - self.t0) * self.prf
-        print(i)  #print(r,az,i)
+        print(i)  # print(r,az,i)
         return r, az, myTime

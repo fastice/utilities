@@ -8,30 +8,47 @@
 import numpy as np
 
 
-def strip(file):
+def strip(fileName):
+    '''
+    Read a file with format
+    # Ncol
+    x y z
+    ...
+    &
+
+    Parameters
+    ----------
+    file : str
+        File to read.
+
+    Returns
+    -------
+    data1 : TYPE
+        DESCRIPTION.
+
+    '''
     # define data
     data = []
-    # Open file
-    f = open(file, 'r')
     i = 0
     ncol = 0
-    # cycle through lines
-    for line in iter(f):
-        # break if end of data
-        if "&" in line:
-            break
-        # process lines that are not comments
-        if ";" not in line:
-            tmp = line.split()
-            if '#' in line:
-                print(tmp[0], tmp[1])
-                ncol = int(tmp[1])
-            elif ncol > 0:
-                tmp = tmp[0:ncol]
-                data.append(tmp)
-                i += 1
-
+    # Open file
+    with open(fileName, 'r') as f:
+        # cycle through lines
+        for line in iter(f):
+            # break if end of data
+            if "&" in line:
+                break
+            # process lines that are not comments
+            if ";" not in line:
+                tmp = line.split()
+                if '#' in line:
+                    # print(tmp[0], tmp[1])
+                    ncol = int(tmp[1])
+                elif ncol > 0:
+                    tmp = tmp[0:ncol]
+                    data.append(tmp)
+                    i += 1
     # make a numpy array out of the result
     data1 = np.array(data)
-    data1=data1.astype(np.float)
+    data1 = data1.astype(np.float)  # Force float
     return data1

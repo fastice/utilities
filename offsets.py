@@ -4,7 +4,7 @@ from utilities.writeImage import writeImage
 from utilities import geodatrxa
 from utilities import myerror
 import os
-
+import shutil
 from subprocess import call
 import ntpath
 
@@ -623,55 +623,57 @@ class offsets:
         if self.geo1 is not None and self.geo2 is not None:
             print('{0:s} {1:s}'.format(self.geo1, self.geo2), file=fp)
 
+    def writeDatFile(self, fileName, azError=False):
+        ''' write an individual dat file'''
+        # output common values
+        with open(fileName, 'w') as fpDat:
+            print(self.r0, self.a0, self.nr, self.na, self.dr, self.da, end='',
+                  file=fpDat)
+            if azError:
+                print(' ', self.azErr, end='', file=fpDat)
+            print('', file=fpDat)  # Force cr
+            # print geos
+            self.printGeos(fpDat)
+
+    def writeDatFiles(self, datFile=None):
+        ''' write dat file '''
+        # check names defined
+        if len(self.datFile) < 1 or datFile is not None:
+            self.datFileName(datFile=datFile)
+        # write dat file
+        if self.verbose:
+            print(self.datFile)
+        # azimuth.offsets/range.offsets write those files
+        if 'azimuth.offsets' in self.datFile:
+            self.writeDatFile(self.datFile, azError=True)  # write the az error
+            self.writeDatFile(self.datFile.replace('azimuth', 'range'))
+        # Otherwise use base name and copy
+        else:
+            self.writeDatFile(self.datFile)
+            shutil.copyfile(self.datFile,
+                            self.datFile.replace('.dat', '.da.dat'))
+            shutil.copyfile(self.datFile,
+                            self.datFile.replace('.dat', '.dr.dat'))
+
     def writeOffsets(self, fileRoot=None, rangeFile=None, datFile=None):
         '''
         Write Offsets
         '''
-        # check names defined
+        # process file names if needed
         if len(self.azimuthFile) < 1 or fileRoot is not None:
             if fileRoot is not None:
                 self.offsetFileNames(fileRoot, rangeFile=rangeFile)
             else:
                 self.offsetFileNames(self.fileRoot, rangeFile=rangeFile)
-        azFile = self.azimuthFile
-        rgFile = self.rangeFile
-        if len(self.datFile) < 1 or datFile is not None:
-            self.datFileName(datFile=datFile)
-        # write dat file
-        datFile = self.datFile
-        fpDat = open(datFile, 'w')
-        if self.verbose:
-            print(self.datFile)
-        if 'azimuth.offsets' not in self.datFile:
-            # no azimuth, so output 6 entries
-            print(self.r0, self.a0, self.nr, self.na, self.dr, self.da,
-                  file=fpDat)
-            self.printGeos(fpDat)
-        else:
-            # azimuth so output azErr (even if zero)
-            print(self.r0, self.a0, self.nr, self.na, self.dr, self.da,
-                  self.azErr, file=fpDat)
-            self.printGeos(fpDat)
-        fpDat.close()
-        # check if az/range pair so azError treated properly
-        if 'azimuth.offsets' in self.datFile:
-            # if azimuth, write the range with no azErr
-            fpDat = open(datFile.replace('azimuth', 'range'), 'w')
-            print(self.r0, self.a0, self.nr, self.na, self.dr, self.da,
-                  file=fpDat)
-            self.printGeos(fpDat)
-            fpDat.close()
-        # otherwise just make a copy
-        else:
-            call('cp ' + datFile+' ' + datFile.replace('.dat', '.da.dat'),
-                 shell=True)
-            call('cp ' + datFile+' ' + datFile.replace('.dat', '.dr.dat'),
-                 shell=True)
+        # write dat files
+        self.writeDatFiles(datFile=datFile)
         # write offsets
-        writeImage(rgFile, self.rgOff, '>f4')
-        writeImage(azFile, self.azOff, '>f4')
+        writeImage(self.rangeFile, self.rgOff, '>f4')
+        writeImage(self.azimuthFile, self.azOff, '>f4')
+        # write mask if needed
         if len(self.mask) > 0 and len(self.maskFile) > 0:
             writeImage(self.maskFile, self.mask, 'u1')
+        # write sigma files
         if len(self.sigmaAFile) > 0 and len(self.sigmaRFile) > 0 and \
                 len(self.sigmaA) > 0 and len(self.sigmaR) > 0:
             if self.verbose:
@@ -692,11 +694,11 @@ class offsets:
         X = x[good12].flatten()
         Y = y[good12].flatten()
         # poly values
-        A = np.array([X*0+1, X, Y]).T
+        A = np.array([X * 0 + 1, X, Y]).T
         # diffs
         Brg = z[good12].flatten()
         # compute polynomials
-        coeffXY, rR, rankR, sR = np.linalg.lstsq(A, Brg)
+        coeffXY, rR, rankR, sR = np.linalg.lstsq(A, Brg, rcond=None)
         return coeffXY
 
     def computeHeading(self, fileRoot=None):

@@ -73,7 +73,7 @@ def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False):
         #
         # loop through running thread to find threads that are done
         for t in running:
-            if not t.isAlive():
+            if not t.is_alive():
                 toRemove.append(t)
         #
         # update list of running
