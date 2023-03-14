@@ -684,9 +684,7 @@ class offsets:
 
     def computePlaneH(self, x, y, z):
         '''
-        compute satellite heading
-        This program returns the satellite heading relative to north (in NH)
-        or south (in SH)
+        compute plane fit for satellite heading to smooth out result.
         '''
     # cull bad
         good12 = z > -1.99e9
@@ -702,6 +700,10 @@ class offsets:
         return coeffXY
 
     def computeHeading(self, fileRoot=None):
+        '''
+        This program returns the satellite heading relative to north (in NH)
+        or south (in SH)
+        '''
         if len(self.lat) == 0 or len(self.lon) == 0:
             myerror('Error in offsets.computeHeading: called without latitude '
                     'loaded')
@@ -714,12 +716,12 @@ class offsets:
                     'implemented yet')
         #
         lattom = 110947.
-        skip = 1
+        skip = 10
         azsp = self.slpAz * self.da*skip
         dlat = np.zeros(np.shape(self.lat))
         dlat[skip:, :] = (self.lat[skip:, :] - self.lat[:-skip, :]) * lattom
         # slowly varying so replicate bottom line
-        dlat[0:1, :] = dlat[skip, :]
+        dlat[0:skip, :] = dlat[skip, :]
         # make relative to south
         if self.geodatrxa.isSouth():
             # if not self.geodatrxa.isDescending():

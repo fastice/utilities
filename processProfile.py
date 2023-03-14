@@ -7,31 +7,29 @@ Created on Mon Jun 10 07:31:31 2019
 import numpy as np
 
 
-def processProfile(xl, yl, deltaX):
-    ''' For a series lines segments forming a polyline (xl,yl), uniformly
-    sample with spacing deltaX'''
-    # compute number of segments
-    nSegs = len(xl) - 1
-    xdom, ydom, dist = [], [], []
-    # approximate uniform sampling of points
-    for i in range(0, nSegs):
-        dist = np.sqrt((xl[i+1] - xl[i])**2 + (yl[i+1] - yl[i])**2)
-        nPts = int(round(dist/deltaX))
+def processProfile(xls, yls, deltaX):
+    ''' For a series lines segments forming a polyline (xl,yl),
+    sample with nearly uniform spacing deltaX'''
+    # Setup return values
+    xdom, ydom, dist = np.array([]), np.array([]), np.array([])
+    # Compute distances for each segment
+    dxs, dys = np.diff(xls), np.diff(yls)
+    distances = np.cumsum(np.sqrt(dxs**2 + dys**2))
+    pointCounts = np.rint(distances/deltaX)
+    # Process each segment
+    for dist, dx, dy, xl, yl, nPts in zip(distances, dxs, dys, xls, yls,
+                                          pointCounts):
         if nPts > 0:
-            dxN = (xl[i+1]-xl[i])/nPts
-            dyN = (yl[i+1]-yl[i])/nPts
-            for j in range(0, nPts):
-                xdom.append(xl[i]+j*dxN)
-                ydom.append(yl[i]+j*dyN)
-    xdom.append(xl[-1])
-    ydom.append(yl[-1])
-    #
+            # Step size
+            dxN = dx/nPts
+            dyN = dy/nPts
+            #
+            xdom = np.concatenate((xdom, xl + dxN*np.arange(0, nPts)))
+            ydom = np.concatenate((ydom, yl + dyN*np.arange(0, nPts)))
+    # append last point
+    xdom = np.concatenate((xdom, xls[-1:]))
+    ydom = np.concatenate((ydom, yls[-1:]))
     # Compute distances along profiles
-    d = [0]
-    print(xdom[0], ydom[0], d[0])
-    for i in range(1, len(xdom)):
-        delta = np.sqrt((xdom[i] - xdom[i-1])**2 + (ydom[i] - ydom[i-1])**2)
-        d.append(d[i-1] + delta)
-        # print(xdom[i],ydom[i],d[i])
-
-    return np.array(xdom), np.array(ydom), np.array(d)
+    d = np.cumsum(np.concatenate(([0], np.sqrt(np.diff(xdom)**2 +
+                                               np.diff(ydom)**2))))
+    return xdom, ydom, d

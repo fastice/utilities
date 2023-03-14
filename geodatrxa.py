@@ -33,9 +33,8 @@ class geodatrxa:
         self.stateTime = None
         self.nState, self.tState, self.dTState = -1, -1, -1
         self.position = self.velocity = []
-        self.ecef = pyproj.Proj(proj='geocent', ellps='WGS84', datum='WGS84')
-        self.llz = pyproj.Proj(proj='latlong', ellps='WGS84', datum='WGS84')
-        self.llzToEcef = pyproj.Transformer.from_proj(self.llz, self.ecef)
+        self.llzToEcef = None
+
         self.minT, self.maxT = -1, -1
         self.fx, self.fy, self.fz, self.fvx, self.fvy, self.fvz = [None]*6
         # in most cases all or no args would be passe.
@@ -155,7 +154,7 @@ class geodatrxa:
                                           ['ascending', 'descending']):
             print('geodatrxa.isDescending: no ascdesc value given')
             exit()
-        return True if self.ascdesc.lower() == 'asscending' else False
+        return True if self.ascdesc.lower() == 'ascending' else False
 
     def readFile(self, file=None, echo=False):
         if file is not None:
@@ -344,8 +343,15 @@ class geodatrxa:
 
     def lltoecef(self, lat, lon, zelev):
         ''' convert llz to ecef'''
-    #    return pyproj.transform(self.llz, self.ecef, lon, lat, zelev,
-    #                            radians=False)
+        #    return pyproj.transform(self.llz, self.ecef, lon, lat, zelev,
+        #                            radians=False)
+        if self.llzToEcef is None:
+            self.ecef = pyproj.Proj(proj='geocent', ellps='WGS84',
+                                    datum='WGS84')
+            self.llz = pyproj.Proj(proj='latlong', ellps='WGS84',
+                                   datum='WGS84')
+            self.llzToEcef = pyproj.Transformer.from_proj(self.llz, self.ecef)
+
         return self.llzToEcef.transform(lat, lon, zelev, radians=False)
 
     def ReH(self, myTime):

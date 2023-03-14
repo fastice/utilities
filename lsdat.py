@@ -2,7 +2,7 @@
 import numpy as np
 import pyproj
 from datetime import datetime, timedelta
-from utilities import myerror
+from utilities import myerror, mywarning
 
 
 class lsdat:
@@ -148,7 +148,7 @@ class lsdat:
             return myType(myDict[key])
         return None
 
-    def readLSdat(self, LSDatFile, printData=False):
+    def readLSdat(self, LSDatFile, printData=False, warning=False):
         myDict = {}
         try:
             fp = open(LSDatFile, 'r')
@@ -199,4 +199,7 @@ class lsdat:
                 print(self.successRate, self.culledRate)
                 print(self.sigmaX, self.sigmaY)
         except Exception:
-            myerror("Problem reading lsdat file "+LSDatFile)
+            if not warning:
+                myerror("Problem reading lsdat file "+LSDatFile)
+            else:
+                mywarning("Problem reading lsdat file "+LSDatFile)

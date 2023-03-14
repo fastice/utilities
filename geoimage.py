@@ -232,7 +232,7 @@ class geoimage:
         if epsgCode is None and wktFile is None:
             return None
         if wktFile is not None:
-             wkt = self.readWKT(wktFile)
+            wkt = self.readWKT(wktFile)
         else:
             sr = osr.SpatialReference()
             sr.ImportFromEPSG(epsgCode)
@@ -279,7 +279,8 @@ class geoimage:
 
     def writeMyTiff(self, tiffFile, epsg=None, noDataDefault=None,
                     predictor='YES', noV=False, overviews=None,
-                    driverName='COG', wktFile=None, computeStats=True):
+                    driverName='COG', wktFile=None, computeStats=True,
+                    resampling='AVERAGE'):
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note: tiffFile should not have a ".tif" extension - one will be
             added.
@@ -310,14 +311,15 @@ class geoimage:
                                       overviews=overviews, predictor=predictor,
                                       noDataDefault=noDataDefault,
                                       driverName=driverName, wktFile=wktFile,
-                                      computeStats=computeStats)
+                                      computeStats=computeStats,
+                                      resampling=resampling)
         except Exception:
             myerror(f"geoimage.writeMyTiff: error writing file {tiffFile}")
 
     def writeCloudOptGeo(self, tiffFile, suffix, epsg, gdalType,
                          overviews=None, predictor='YES', noDataDefault=None,
                          bigTiff=False, driverName='COG', wktFile=None,
-                         computeStats=True):
+                         computeStats=True, resampling='AVERAGE'):
         ''' write a cloudoptimized geotiff with overviews.
         Set format to GTiff for a plain geotiff '''
 
@@ -368,10 +370,11 @@ class geoimage:
                 if len(overviews) < 2:
                     myerror(f'Overviews {overviews} should be [2, 4, ..])')
                 options.append('COPY_SRC_OVERVIEWS=YES')
-                dst_ds.BuildOverviews('AVERAGE', overviews)
+                dst_ds.BuildOverviews(resampling, overviews)
         else:  # COG OPTIONS
             options.append('GEOTIFF_VERSION=1.1')
             options.append('GEOTIFF_VERSION=1.1')
+            options.append(f'RESAMPLING={resampling}')
             if predictor in ['YES', 'NO']:
                 options.append(f'PREDICTOR={predictor}')
         #
@@ -468,7 +471,7 @@ class geoimage:
             elif isinstance(myArray[0, 0], np.floating):
                 # print(minValue)
                 myArray[myArray <= minValue] = np.nan
-            exec(f'self.{myType}=myArray')
+            setattr(self, myType, myArray)
         #
         # compute mag for velocity and errors
         if self.geoType == 'velocity':
@@ -530,7 +533,8 @@ class geoimage:
         # helper to write image (set no data to nan)
 
         def writeMyImage(myGeo, NaNVal, x, fileName, dType):
-            x[np.isnan(x)] = NaNVal
+            if dType not in ['u1']:
+                x[np.isnan(x)] = NaNVal
             writeImage(fileName, x, dType)
             myGeo.writeGeodat(f'{fileName}.geodat')
         #
