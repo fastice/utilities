@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "utilities"
+version = "0.0.1"
+description = "Utilities for fastice"
+authors = [
+    { name = "Ian Joughin", email = "irj@uw.edu" }
+]
+license = { text = "MIT" }
+readme = "README.md"
+keywords = ["SAR", "NISAR", "GrIMP"]
+requires-python = ">=3.8"
+
+[tool.setuptools]
+packages = ["utilities"]
+
+[project.urls]
+Homepage = "https://github.com/fastice/utilities"
+Repository = "https://github.com/fastice/utilities"
+
+[project.scripts]
+
