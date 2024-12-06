@@ -5,8 +5,9 @@ from utilities import geodatrxa
 from utilities import myerror
 import os
 import shutil
-from subprocess import call
 import ntpath
+import rasterio
+from osgeo import gdal
 
 
 class offsets:
@@ -15,7 +16,7 @@ class offsets:
     def __init__(self, fileRoot=None, rangeFile=None, latlon=None,
                  datFile=None, sigmaAFile=None, sigmaRFile=None,
                  matchTypeFile=None, geodatrxaFile=None, maskFile=None,
-                 verbose=True, myPath=None):
+                 verbose=True, myPath=None, vrtFile=None):
         '''
         Initialize offsets - defaults to setting up for azimuth.offsets
         fileRoot = specify name to read offsets in from fileRoot
@@ -31,10 +32,11 @@ class offsets:
         #
         # set everything to zero as default
         #
+        gdal.UseExceptions()
         self.nr = self.na = self.r0 = self.a0 = 0
-        self.dr = self.da = self.azErr = 0
+        self.dr = self.da = self.azErr = self.rgErr = 0
         self.fileRoot, self.latlon = [], []
-        self.sigmaAFile, self.sigmaRFile = [], []
+        self.sigmaAFile, self.sigmaRFile = None, None
         self.datFile, self.latFile, self.lonFile = [], [], []
         self.matchTypeFile, self.maskFile = [], []
         self.azOff, self.rgOff, self.sigmaR, self.sigmaA = [], [], [], []
@@ -47,6 +49,10 @@ class offsets:
         self.rCoord, self.aCoord = [], []
         self.path = '.'
         self.verbose = verbose
+        self.meta = None
+        self.vrtFile = vrtFile
+        self.vrtMatchFile = None
+        self.maskVrtFile = None
         #
         # in most cases all or no args would be passed.
         #
@@ -68,22 +74,24 @@ class offsets:
         # in which case they need to be explicitly set
         # compute file names
         #
-        self.offsetFileNames(self.fileRoot, rangeFile=rangeFile)
-        if self.verbose:
-            print('azFile = ', self.azimuthFile)
-            print('rgFile = ', self.rangeFile)
-        # set or guess datFileName
-        self.datFileName(datFile=datFile)
-        if self.verbose:
-            print('datFile =', self.datFile)
-        # set or guess lat/lon file names
-        self.latlonName(latlon=latlon)
-        # set or guess sigmaA/R file names
-        self.sigmaFileName(sigmaAFile=sigmaAFile, sigmaRFile=sigmaRFile)
-        # set or guess
-        self.matchTypeFileName(matchTypeFile=matchTypeFile)
-        #
-        self.maskFileName(maskFile=maskFile)
+        if self.vrtFile is None:
+            self.offsetFileNames(self.fileRoot, rangeFile=rangeFile)
+            if self.verbose:
+                print('azFile = ', self.azimuthFile)
+                print('rgFile = ', self.rangeFile)
+            # set or guess datFileName
+            self.datFileName(datFile=datFile)
+            if self.verbose:
+                print('datFile =', self.datFile)
+            # set or guess lat/lon file names
+            self.latlonName(latlon=latlon)
+            # set or guess sigmaA/R file names
+            self.sigmaFileName(sigmaAFile=sigmaAFile,
+                               sigmaRFile=sigmaRFile)
+            # set or guess
+            self.matchTypeFileName(matchTypeFile=matchTypeFile)
+    #
+            self.maskFileName(maskFile=maskFile)
         #
         if geodatrxaFile is not None:
             self.geodatrxaFile = self.offFilePath(geodatrxaFile)
@@ -171,8 +179,15 @@ class offsets:
     def minmaxR(self):
         return self.minmax(self.rgOff)
 
-    def readCC(self, ccFile=None, datFile=None):
-        ''' reads cross corr data (cc) name '''
+    def readCC(self, ccFile=None, datFile=None, vrtFile=None):
+        '''
+        reads cross corr data (cc) name
+        '''
+        if vrtFile is not None:
+            self.vrtFile = vrtFile
+        if self.vrtFile is not None:
+            self.readVrt({'Correlation': 'cc'})
+            return
         # makes sure there is a name
         if self.ccFile is None or ccFile is not None:
             self.ccFileName(ccFile=ccFile)
@@ -206,17 +221,22 @@ class offsets:
         # null files names if they don't exist
         if not os.path.exists(self.latFile) \
                 or not os.path.exists(self.lonFile):
-            if self.verbose:
+            if self.verbose or True:
                 print('Warning: one or of these files do no exist ',
                       self.latFile, self.lonFile)
             self.latFile = []
             self.lonFile = []
 
-    def readLatlon(self, latlon=None, datFile=None):
+    def readLatlon(self, latlon=None, datFile=None, vrtFile=None):
         '''
         Reads lat/lon file - using set filenames, or specifiy with
         latlon=basefilename
         '''
+        if vrtFile is None:
+            vrtFile = self.latFile.replace('.lat', '.ll.vrt')
+        if os.path.exists(vrtFile):
+            self.readVrt({'lat': 'lat', 'lon': 'lon'}, vrtFile=vrtFile)
+            return
         # read datFile if needed.
         if self.nr < 1 or self.na < 1:
             try:
@@ -238,12 +258,12 @@ class offsets:
             myerror(f'Offsets tried to read an invalid lat or lon file '
                     f'- {self.latFile} {self.lonFile}')
 
-    def getLatLon(self, latlon=None):
+    def getLatLon(self, latlon=None, vrtFile=None):
         '''
         Return lat/lon dat  - force read if need.
         '''
         if len(self.lat) <= 0:
-            self.readLatlon(latlon=latlon)
+            self.readLatlon(latlon=latlon, vrtFile=vrtFile)
 
         # check again in case it faile
         if len(self.lat) <= 0:
@@ -284,13 +304,15 @@ class offsets:
         Compute mask file names or set with matchTypeFile=filename
         '''
         #
+        if maskFile is not None:
+            self.maskFile = maskFile
+            return
+        # now check path
         # compute defaults first
         if '.da' in self.azimuthFile:
             self.maskFile = self.azimuthFile.replace('.da', '.mask')
         # now over ride
-        if maskFile is not None:
-            self.maskFile = maskFile
-        # now check path
+
         # return if couldn't form name
         if len(self.maskFile) == 0:
             return
@@ -306,13 +328,19 @@ class offsets:
         self.maskFile = self.offFilePath(self.maskFile)
         return
 
-    def readMask(self, maskFile=None):
+    def readMask(self, maskFile=None, vrtFile=None):
         '''
         Reads mask files - assumes filenames set, or specify here with
         maskFile=filename
         '''
-        if maskFile is not None:
+        if vrtFile is not None:
+            self.maskVrtFile = vrtFile
+        if self.maskVrtFile is not None:
+            self.readVrt({'Mask': 'mask'}, vrtFile=self.maskVrtFile)
+            return
+        if maskFile is None:
             self.maskFileName(maskFile=maskFile)
+        #
         if len(self.maskFile) == 0:
             myerror(f'\n\nError: Offsets tried to read an blank mask file -'
                     f'{self.maskFile}')
@@ -321,8 +349,8 @@ class offsets:
                 print(f'Reading {self.maskFile} with size {self.nr}x{self.na}')
             self.mask = readImage(self.maskFile, self.nr, self.na, 'u1')
         else:
-            myerror(f'\n\nOffsets tried to read an invalid mask '
-                    'file {self.maskFile} ')
+            myerror('\n\nOffsets tried to read an invalid mask '
+                    f'file {self.maskFile} ')
         return self.mask
 
     def getMask(self, maskFile=None):
@@ -338,11 +366,16 @@ class offsets:
         #
         return self.mask
 
-    def readMatchType(self, matchTypeFile=None):
+    def readMatchType(self, matchTypeFile=None, vrtFile=None):
         '''
         Reads matchType files -
         assumes filenames set, or specify here with matchTypeFile=filename.
         '''
+        if vrtFile is not None:
+            self.vrtMatchFile = vrtFile
+        if self.vrtMatchFile is not None:
+            self.readVrt({'MatchType': 'matchType'}, vrtFile=self.vrtMatchFile)
+            return
         if matchTypeFile is not None:
             self.matchTypeFileName(matchTypeFile=matchTypeFile)
         if len(self.matchTypeFile) == 0:
@@ -400,11 +433,16 @@ class offsets:
                 print('*** warning no sigma files exist ****')
         return
 
-    def readSigma(self, sigmaAFile=None, sigmaRFile=None):
+    def readSigma(self, sigmaAFile=None, sigmaRFile=None, vrtFile=None):
         '''
         Reads sigmaA/R files - assumes filenames set - but can override with
         sigmaAFile, sigmaRFile
         '''
+        if vrtFile is not None:
+            self.vrtFile = vrtFile
+        if self.vrtFile is not None:
+            self.readVrt({'RangeSigma': 'sigmaR', 'AzimuthSigma': 'sigmaA'})
+            return
         #
         # set file name only if specified, assumes defaults tried in init
         if sigmaAFile is not None or sigmaRFile is not None:
@@ -441,6 +479,9 @@ class offsets:
         if myPath is not None:
             self.setMyPath(myPath)
         self.datFile = self.offFilePath(self.datFile)
+        vrtFile = self.datFile.replace('.dat', '.vrt')
+        if os.path.exists(vrtFile):
+            self.vrtFile = vrtFile
 
     def setFileRoot(self, fileRoot):
         self.fileRoot = fileRoot
@@ -486,10 +527,17 @@ class offsets:
             self.datFileName()
             self.maskFileName()
 
-    def readOffsetsDat(self, datFile=None):
+    def readOffsetsDat(self, datFile=None, vrtFile=None):
         '''
         Read Offset dat file with either names setup earlier, or file set here.
         '''
+        if vrtFile is None and self.vrtFile is not None:
+            vrtFile = self.vrtFile
+        if vrtFile is not None:
+            if os.path.exists(vrtFile):
+                # read with empty band Translation to just get meta
+                self.readVrt({}, vrtFile=vrtFile)
+                return
         #
         # read offsets first
         if len(self.datFile) == 0 or datFile is not None:
@@ -513,9 +561,7 @@ class offsets:
                     self.azErr = a[6]
                 break
         #
-
         line = fdat.readline()
-
         try:
             geo1, geo2 = line.split()
             if len(geo1) > 1 and len(geo2) > 1:
@@ -525,11 +571,79 @@ class offsets:
             pass
         fdat.close()
 
-    def readOffsets(self, fileRoot=None, rangeFile=None, datFile=None):
+    def readVrt(self, bandTranslation, vrtFile=None):
+        '''
+        Parameters
+        ----------
+        bandTranslation : dict
+            A list of the variables to read with the vrt band names as keys
+            and the variable to assign to as values
+            (e.g.{'RangeOffsets': 'rgOff'})
+        Returns
+        -------
+        None.
+
+        '''
+        #  Translation of vrt names to class names
+        metaTranslationInt = {'a0': 'a0', 'r0': 'r0',
+                              'dr': 'deltaR', 'da': 'deltaA'}
+        metaTranslationF = {'azErr': 'sigmaStreaks', 'rgErr': 'sigmaRange'}
+        fileNames = {'rgOff': 'rangeFile', 'azOff': 'azimuthFile',
+                     'SigmaR': 'SigmaRFile', 'SigmaA': 'SigmaAFile'}
+        # Save the meta data
+        if vrtFile is None:
+            vrtFile = self.vrtFile
+        # Check file exists
+        if not os.path.exists(vrtFile):
+            myerror("readVrt: vrtfiles does not exist {vrtFile}")
+        #
+        r = rasterio.open(vrtFile)
+        self.meta = r.tags()
+        # Get the mapping between band name and index
+        allBands = \
+            {r.tags(bidx=i)['Description']: i for i in range(1, r.count+1)}
+        # Loop over requested variables
+        for bandKey in bandTranslation:
+            if bandKey in allBands:
+                if self.verbose:
+                    print(f'Reading Variable {bandTranslation[bandKey]}')
+                varName = bandTranslation[bandKey]
+                setattr(self, varName, r.read(allBands[bandKey]))
+                #
+                if varName in fileNames:
+                    setattr(self, fileNames[varName],
+                            r.files[allBands[bandKey]])
+            else:
+                myerror(f'readVrt: Could not find requested band: {bandKey}'
+                        f'in {vrtFile}')
+
+        # integer fields
+        for key in metaTranslationInt:
+            if metaTranslationInt[key] in self.meta:
+                setattr(self, key, int(self.meta[metaTranslationInt[key]]))
+            else:
+                print(f"Warning: could not find {key} while reading {vrtFile}")
+        # floating point fields
+        for key in metaTranslationF:
+            if metaTranslationF[key] in self.meta:
+                setattr(self, key, float(self.meta[metaTranslationF[key]]))
+            else:
+                print(f"Warning: could not find {key} while reading {vrtFile}")
+        # Size
+        self.nr = r.meta['width']
+        self.na = r.meta['height']
+
+    def readOffsets(self, fileRoot=None, rangeFile=None, datFile=None,
+                    vrtFile=None):
         '''
         Read da/dr offset file at previously set up offset names, or specify
         directly with values as defined for init.
         '''
+        if vrtFile is not None:
+            self.vrtFile = vrtFile
+        if self.vrtFile is not None:
+            self.readVrt({'RangeOffsets': 'rgOff', 'AzimuthOffsets': 'azOff'})
+            return
         # over ride names if needed.
         if len(self.azimuthFile) == 0 or rangeFile is not None \
                 or fileRoot is not None:
@@ -554,12 +668,13 @@ class offsets:
 
         return self.rgOff.astype(float), self.azOff.astype(float)
 
-    def getOffsets(self, fileRoot=None, rangeFile=None, datFile=None):
+    def getOffsets(self, fileRoot=None, rangeFile=None, datFile=None,
+                   vrtFile=None):
         '''
         Return offsets values as float
         '''
         if len(self.rgOff) <= 0:
-            self.readOffsets(fileRoot, rangeFile, datFile)
+            self.readOffsets(fileRoot, rangeFile, datFile, vrtFile=vrtFile)
             # check again in case it faile
         if len(self.rgOff) <= 0:
             print(' Could not read lat/lon - check files exist ')
@@ -571,10 +686,10 @@ class offsets:
         '''
         Remove points in list from offsets - indices are into flattened list
         '''
-    #
-    # save shape
+        #
+        # save shape
         shapeSave = self.rgOff.shape
-    # make sure not empty list
+        # make sure not empty list
         if len(toRemove) <= 0:
             return
         # flatten
@@ -587,6 +702,7 @@ class offsets:
         if len(noUse) > 0:
             rg[noUse] = -2.e9
             az[noUse] = -2.e9
+        # print('nremove = ', np.sum(noUse))
         # reshape
         self.rgOff = rg.reshape(shapeSave)
         self.azOff = az.reshape(shapeSave)
@@ -635,7 +751,77 @@ class offsets:
             # print geos
             self.printGeos(fpDat)
 
-    def writeDatFiles(self, datFile=None):
+    def genMeta(self):
+        '''
+        Generate meta data
+        Returns
+        -------
+        None.
+
+        '''
+        self.meta = {}
+        self.meta['a0'] = f'{self.a0}'
+        self.meta['r0'] = f'{self.r0}'
+        # Assume no orig meta, so MSP
+        self.meta['ByteOrder'] = 'MSB'
+        self.meta['deltaA'] = f'{self.da}'
+        self.meta['deltaR'] = f'{self.dr}'
+
+        self.meta['sigmaRange'] = f'{self.rgErr}'
+        self.meta['sigmaStreaks'] = f'{self.azErr}'
+        if self.geo1 is not None:
+            self.meta['geo1'] = self.geo1
+            self.meta['geo2'] = self.geo2
+
+    def writeOffsetVrt(self, newVRTFile, sourceFiles, descriptions,
+                       byteOrder=None, additionalMetaData=None):
+        '''
+        Write a vrt for the file. Note sourcefiles and descriptions have
+        to be passed in.
+        '''
+        print(sourceFiles)
+        print(descriptions)
+        # get the meta data from the template
+        # Kill any old file
+        if os.path.exists(newVRTFile):
+            os.remove(newVRTFile)
+        # Create VRT
+        drv = gdal.GetDriverByName("VRT")
+        vrt = drv.Create(newVRTFile, self.nr, self.na, bands=0,
+                         eType=gdal.GDT_Float32)
+        vrt.SetGeoTransform([0.5, 0.5, 1., 0., 0., 1.])
+
+        if self.meta is None:
+            self.genMeta()
+        #
+        if byteOrder is None:
+            if "ByteOrder" in self.meta:
+                byteOrder = self.meta["ByteOrder"]
+            else:
+                byteOrder = "MSB"
+                self.meta["ByteOrder"] = byteOrder
+        else:
+            self.byteOrder = byteOrder
+            self.meta["ByteOrder"] = byteOrder
+        if additionalMetaData is not None:
+            self.meta.update(additionalMetaData)
+        vrt.SetMetadata(self.meta)
+        # Look to add bands
+        for sourceFile, description, bandNumber in \
+                zip(sourceFiles, descriptions, range(1, 1 + len(sourceFiles))):
+            options = [f"SourceFilename={sourceFile}", "relativeToVRT=1",
+                       "subclass=VRTRawRasterBand", f"BYTEORDER={byteOrder}",
+                       bytes(0)]
+            #
+            print(sourceFile, description, bandNumber)
+            vrt.AddBand(gdal.GDT_Float32, options=options)
+            band = vrt.GetRasterBand(bandNumber)
+            #band.SetDescription(description)
+            band.SetMetadataItem("Description", description)
+        # Close the vrt
+        vrt = None
+
+    def writeDatFiles(self, datFile=None, rootOnly=False):
         ''' write dat file '''
         # check names defined
         if len(self.datFile) < 1 or datFile is not None:
@@ -650,37 +836,54 @@ class offsets:
         # Otherwise use base name and copy
         else:
             self.writeDatFile(self.datFile)
-            shutil.copyfile(self.datFile,
-                            self.datFile.replace('.dat', '.da.dat'))
-            shutil.copyfile(self.datFile,
-                            self.datFile.replace('.dat', '.dr.dat'))
+            if not rootOnly:
+                shutil.copyfile(self.datFile,
+                                self.datFile.replace('.dat', '.da.dat'))
+                shutil.copyfile(self.datFile,
+                                self.datFile.replace('.dat', '.dr.dat'))
 
-    def writeOffsets(self, fileRoot=None, rangeFile=None, datFile=None):
+    def floatFormat(self, byteOrder=None):
+        '''
+        Select the output format
+        '''
+        if byteOrder is None:
+            byteOrder = "MSB"
+            if self.meta is not None:
+                if 'ByteOrder' in self.meta:
+                    byteOrder = self.meta['ByteOrder']
+                    if byteOrder not in ["MSB", "LSB"]:
+                        myerror(f'writeOffsets: invalid byteOrder {byteOrder}')
+        return {'MSB': '>f4', 'LSB': 'f4'}[byteOrder]
+
+    def writeOffsets(self, fileRoot=None, rangeFile=None, datFile=None,
+                     noDatFiles=False, rootOnly=False, byteOrder='MSB'):
         '''
         Write Offsets
         '''
         # process file names if needed
+        floatFormat = self.floatFormat(byteOrder=byteOrder)
         if len(self.azimuthFile) < 1 or fileRoot is not None:
             if fileRoot is not None:
                 self.offsetFileNames(fileRoot, rangeFile=rangeFile)
             else:
                 self.offsetFileNames(self.fileRoot, rangeFile=rangeFile)
         # write dat files
-        self.writeDatFiles(datFile=datFile)
+        if not noDatFiles:
+            self.writeDatFiles(datFile=datFile, rootOnly=rootOnly)
         # write offsets
-        writeImage(self.rangeFile, self.rgOff, '>f4')
-        writeImage(self.azimuthFile, self.azOff, '>f4')
+        writeImage(self.rangeFile, self.rgOff, floatFormat)
+        writeImage(self.azimuthFile, self.azOff, floatFormat)
         # write mask if needed
         if len(self.mask) > 0 and len(self.maskFile) > 0:
             writeImage(self.maskFile, self.mask, 'u1')
         # write sigma files
-        if len(self.sigmaAFile) > 0 and len(self.sigmaRFile) > 0 and \
+        if self.sigmaAFile is not None and self.sigmaRFile is not None and \
                 len(self.sigmaA) > 0 and len(self.sigmaR) > 0:
             if self.verbose:
                 print(f'writing sigmaA {self.sigmaAFile} SigmaR '
                       f'{self.sigmaRFile}')
-            writeImage(self.sigmaAFile, self.sigmaA, '>f4')
-            writeImage(self.sigmaRFile, self.sigmaR, '>f4')
+            writeImage(self.sigmaAFile, self.sigmaA, floatFormat)
+            writeImage(self.sigmaRFile, self.sigmaR, floatFormat)
 
     def computePlaneH(self, x, y, z):
         '''
@@ -786,8 +989,8 @@ class offsets:
         '''
         Convert slp coords to pixels in offset image
         '''
-        ro = np.round((r-self.r0)/self.dr).astype(np.int)
-        ao = np.round((a-self.a0)/self.da).astype(np.int)
+        ro = np.round((r-self.r0)/self.dr).astype(np.int32)
+        ao = np.round((a-self.a0)/self.da).astype(np.int32)
         # check bounds
         rcheck = np.logical_and(ro >= 0, ro < self.nr)
         acheck = np.logical_and(ao >= 0, ao < self.na)

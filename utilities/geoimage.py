@@ -31,7 +31,7 @@ class geoimage:
         self.velDate = None
         self.fileName = None
         self.fileRoot = None
-        if x is None:
+        if x is not None:
             self.x = x
         if vx is None:
             self.vx = vx
@@ -276,11 +276,10 @@ class geoimage:
     # ------------------------------------------------------------------------
 
 
-
     def writeMyTiff(self, tiffFile, epsg=None, noDataDefault=None,
                     predictor='YES', noV=False, overviews=None,
                     driverName='COG', wktFile=None, computeStats=True,
-                    resampling='AVERAGE'):
+                    resampling='AVERAGE', bigTiff=False):
         """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
             Note: tiffFile should not have a ".tif" extension - one will be
             added.
@@ -312,7 +311,7 @@ class geoimage:
                                       noDataDefault=noDataDefault,
                                       driverName=driverName, wktFile=wktFile,
                                       computeStats=computeStats,
-                                      resampling=resampling)
+                                      resampling=resampling, bigTiff=bigTiff)
         except Exception:
             myerror(f"geoimage.writeMyTiff: error writing file {tiffFile}")
 

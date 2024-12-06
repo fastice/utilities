@@ -151,13 +151,12 @@ class lsdat:
     def readLSdat(self, LSDatFile, printData=False, warning=False):
         myDict = {}
         try:
-            fp = open(LSDatFile, 'r')
-        # crude check sum
-            for line in fp:
-                pieces = line.split('=')
-                if len(pieces) == 2:
-                    myDict[pieces[0].strip()] = pieces[1].strip()
-            fp.close()
+            with open(LSDatFile, 'r') as fp:
+                # crude check sum
+                for line in fp:
+                    pieces = line.split('=')
+                    if len(pieces) == 2:
+                        myDict[pieces[0].strip()] = pieces[1].strip()
             # now stuff values
             self.fileEarly = myDict['fileEarly']
             self.fileLate = myDict['fileLate']
@@ -200,6 +199,6 @@ class lsdat:
                 print(self.sigmaX, self.sigmaY)
         except Exception:
             if not warning:
-                myerror("Problem reading lsdat file "+LSDatFile)
+                myerror(f"Problem reading lsdat file {LSDatFile}")
             else:
-                mywarning("Problem reading lsdat file "+LSDatFile)
+                mywarning(f"Problem reading lsdat file {LSDatFile}")

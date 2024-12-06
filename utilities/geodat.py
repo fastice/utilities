@@ -46,7 +46,7 @@ class geodat:
         self.llprojEPSG = "EPSG:4326"
         self.llproj = pyproj.Proj(self.llprojEPSG)  # Obsolete
         if wkt is not None:
-            self.domain = re.findall('[a-z,A-Z]+', wkt)[1].lower()
+            #self.domain = re.findall('[a-z,A-Z]+', wkt)[1].lower()
             self.xyprojSRS = wkt  # This could be a wkt or epsg
         else:
             if self.domain == 'greenland':

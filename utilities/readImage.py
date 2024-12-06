@@ -16,7 +16,7 @@ def readImage(fileName, nx, ny, dataType):
         exit()
 
     dt = np.dtype(dataType)
-    x = np.fromfile(fileName, dtype=dt)
+    x = np.fromfile(fileName, dtype=dt)[0:nx*ny]
     x = np.reshape(x, [ny, nx])
     # print('Data Type ',dataType)
     # swap data so its in native format

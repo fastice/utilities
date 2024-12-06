@@ -14,7 +14,7 @@ from utilities import myerror
 import os
 
 
-def makeMaskFromShape(geo, shpfile):
+def makeMaskFromShape(geo, shpfile, background=1, fill=0):
     '''
     For a geodat specified by geo, produce a corresponding mask from a shpfile
     (inlucd .shp)
@@ -25,7 +25,7 @@ def makeMaskFromShape(geo, shpfile):
     # loop through features
     nx, ny = geo.sizeInPixels()
     # create PIL image, which is widthxheight, L indicates 8-bit
-    mask = Image.new('L', (nx, ny), 1)
+    mask = Image.new('L', (nx, ny), background)
     # e.g., < .shp
     if len(shpfile) < 4:
         return []
@@ -36,9 +36,16 @@ def makeMaskFromShape(geo, shpfile):
     shape = shapefile.Reader(shpfile)
     #
     # Loop over each feature in shape file
+    # print('here',  shape.shapeRecords())
+    count = 0
     for feature in shape.shapeRecords():
         # extract polygon from feature
-        poly = feature.shape.__geo_interface__
+        count += 1
+        try:
+            poly = feature.shape.__geo_interface__
+        except Exception:
+            print(f'bad feature {count}')
+            continue
         xyPoly = np.array(poly['coordinates'])[0]
         # check it 2D
         if len(xyPoly.shape) == 2:
@@ -47,7 +54,7 @@ def makeMaskFromShape(geo, shpfile):
             # create array of tuple: poly=[ (x1,y1), (x2,y2) ...]
             poly = list(zip(xi, yi))
             # burn mask in polygon
-            ImageDraw.Draw(mask).polygon(poly, outline=0, fill=0)
+            ImageDraw.Draw(mask).polygon(poly, outline=0, fill=fill)
     # create np array of mask
     # goes from [x][y] to [y][x]
     mask = np.array(mask, dtype='u1')

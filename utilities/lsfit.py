@@ -92,4 +92,4 @@ class lsfit:
                 print(self.Cxx)
                 print(self.Cyy)
         except Exception:
-            myerror("Problem reading lsdat file "+self.fitFile)
+            myerror(f"Problem reading lsdat file {self.fitFile}")

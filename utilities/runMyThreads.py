@@ -5,7 +5,8 @@ from datetime import datetime
 import utilities as u
 
 
-def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False):
+def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False,
+                 quiet=False):
     """ Loop through a list of  -- threads -- starting each one.
     Allow -- maxThreads -- running at once.
     In each loop iteration check status and print number running along with
@@ -43,7 +44,7 @@ def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False):
         #
         # Start a thread is < maxThreads
         #
-        if n % 1 == 0:
+        if n % 1 == 0 and not quiet:
             timeElapsed = datetime.now() - start
             print(grs, message, '(', maxThreads, ')', norm, ': nRunning ', bs,
                   f'{nRun:5}', norm, ' nStarted ', bs, f'{count:5}',
@@ -59,7 +60,8 @@ def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False):
         while count < len(threads) and nRun < maxThreads:
             # run thread and always make sure to return to current directory
             os.chdir(home)
-            print('.', end='')
+            if not quiet:
+                print('.', end='')
             sys.stdout.flush()
             threads[count].start()
             running.append(threads[count])
@@ -82,10 +84,12 @@ def runMyThreads(threads, maxThreads, message, delay=0.2, prompt=False):
             running.remove(t)
         time.sleep(1)
         #
-        print('', end='\r')
+        if not quiet:
+            print('', end='\r')
         n += 1
         if nRun == 0 and count >= len(threads):
             notDone = False
-    print('--\n')
-    u.myalert('Threads Done')
+    if not quiet:
+        print('--\n')
+        u.myalert('Threads Done')
     return

@@ -50,5 +50,5 @@ def strip(fileName):
                     i += 1
     # make a numpy array out of the result
     data1 = np.array(data)
-    data1 = data1.astype(np.float)  # Force float
+    data1 = data1.astype(np.float64)  # Force float
     return data1
