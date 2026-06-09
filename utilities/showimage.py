@@ -654,9 +654,17 @@ def main():
                         help='Decimation factor (default: auto-fit to screen)')
     parser.add_argument('-decFactor', type=int, default=None, dest='decFactor',
                         help=argparse.SUPPRESS)
+    parser.add_argument('--vel', action='store_true',
+                        help='Read vx+vy from a 2-band VRT; display speed = sqrt(vx²+vy²) '
+                             'mod 100 (use --mod to override the modulus)')
+    parser.add_argument('--mod', type=float, default=None, metavar='X',
+                        help='Display image modulo X '
+                             '(default: 100 with --vel, off otherwise)')
     args = parser.parse_args()
 
-    if len(args.files) > 3:
+    if args.vel and len(args.files) != 1:
+        sys.exit('--vel requires exactly one input file')
+    if not args.vel and len(args.files) > 3:
         sys.exit('showimage: at most 3 files can be displayed simultaneously')
 
     try:
@@ -686,43 +694,78 @@ def main():
     else:
         factor = max(1, math.ceil(nx / sw), math.ceil(ny / sh))
 
+    mod_val = args.mod
     image_defs = []
-    for ds, f in zip(datasets, args.files):
-        nb = ds.RasterCount
-        print(f'{f}: {nx}×{ny} px, {nb} band(s), decimation ×{factor}')
 
-        if nb == 1:
-            dec = blockAverage(readBand(ds, 1), factor)
-            vmin = args.vmin if args.vmin is not None else np.nanpercentile(dec, 2)
-            vmax = args.vmax if args.vmax is not None else np.nanpercentile(dec, 98)
-            is_rgb = False
-        else:
-            n_read = min(nb, 3)
-            bands = np.stack([readBand(ds, i) for i in range(1, n_read + 1)], axis=-1)
-            dec = blockAverage(bands, factor)
-            if n_read == 3:
-                for i in range(3):
-                    lo = np.nanpercentile(dec[:, :, i], 2)
-                    hi = np.nanpercentile(dec[:, :, i], 98)
-                    dec[:, :, i] = np.clip(
-                        (dec[:, :, i] - lo) / max(hi - lo, 1e-10), 0, 1)
-                dec = np.nan_to_num(dec, nan=0.0)
-                vmin = vmax = None
-                is_rgb = True
-            else:
-                dec = dec[:, :, 0]
-                vmin = args.vmin if args.vmin is not None else np.nanpercentile(dec, 2)
-                vmax = args.vmax if args.vmax is not None else np.nanpercentile(dec, 98)
-                is_rgb = False
-
+    if args.vel:
+        ds = datasets[0]
+        f  = args.files[0]
+        if ds.RasterCount < 2:
+            sys.exit('--vel: file must have at least 2 bands (vx, vy)')
+        if mod_val is None:
+            mod_val = 100.0
+        vx = readBand(ds, 1)
+        vy = readBand(ds, 2)
+        speed = np.where(np.isfinite(vx) & np.isfinite(vy),
+                         np.sqrt(vx**2 + vy**2), np.nan)
+        dec = blockAverage(speed, factor)
+        dec = np.where(np.isfinite(dec), dec % mod_val, dec)
+        vmin = args.vmin if args.vmin is not None else 0.0
+        vmax = args.vmax if args.vmax is not None else mod_val
+        print(f'{f}: {nx}×{ny} px, speed from bands 1+2, mod {mod_val:.4g}, decimation ×{factor}')
         image_defs.append({
             'dec': dec,
-            'title': f,
+            'title': f'speed mod {mod_val:.4g}: {f}',
             'cmap': args.cmap,
             'vmin': vmin,
             'vmax': vmax,
-            'is_rgb': is_rgb,
+            'is_rgb': False,
         })
+    else:
+        for ds, f in zip(datasets, args.files):
+            nb = ds.RasterCount
+            print(f'{f}: {nx}×{ny} px, {nb} band(s), decimation ×{factor}')
+
+            if nb == 1:
+                dec = blockAverage(readBand(ds, 1), factor)
+                if mod_val is not None:
+                    dec = np.where(np.isfinite(dec), dec % mod_val, dec)
+                vmin = args.vmin if args.vmin is not None else (
+                    0.0 if mod_val is not None else np.nanpercentile(dec, 2))
+                vmax = args.vmax if args.vmax is not None else (
+                    mod_val if mod_val is not None else np.nanpercentile(dec, 98))
+                is_rgb = False
+            else:
+                n_read = min(nb, 3)
+                bands = np.stack([readBand(ds, i) for i in range(1, n_read + 1)], axis=-1)
+                dec = blockAverage(bands, factor)
+                if n_read == 3:
+                    for i in range(3):
+                        lo = np.nanpercentile(dec[:, :, i], 2)
+                        hi = np.nanpercentile(dec[:, :, i], 98)
+                        dec[:, :, i] = np.clip(
+                            (dec[:, :, i] - lo) / max(hi - lo, 1e-10), 0, 1)
+                    dec = np.nan_to_num(dec, nan=0.0)
+                    vmin = vmax = None
+                    is_rgb = True
+                else:
+                    dec = dec[:, :, 0]
+                    if mod_val is not None:
+                        dec = np.where(np.isfinite(dec), dec % mod_val, dec)
+                    vmin = args.vmin if args.vmin is not None else (
+                        0.0 if mod_val is not None else np.nanpercentile(dec, 2))
+                    vmax = args.vmax if args.vmax is not None else (
+                        mod_val if mod_val is not None else np.nanpercentile(dec, 98))
+                    is_rgb = False
+
+            image_defs.append({
+                'dec': dec,
+                'title': f,
+                'cmap': args.cmap,
+                'vmin': vmin,
+                'vmax': vmax,
+                'is_rgb': is_rgb,
+            })
 
     showImage(image_defs, sw, sh)
 
