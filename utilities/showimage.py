@@ -304,11 +304,15 @@ def showImage(image_defs, sw, sh, switch_infos=None):
     col_active          = [False]
     row_active          = [False]
     lines_visible       = [True]
-    singlePlot_active   = [False]
     overlay_set_visible = [None]
     profile_pts         = []
-    lineplot_state      = {'win': None, 'axes': None, 'fig': None,
-                           'canvas': None, 'mode': None, 'single': False}
+    # per-mode state; each window is independent
+    plot_states = {
+        'col': {'win': None, 'axes': None, 'fig': None,
+                'canvas': None, 'single': False},
+        'row': {'win': None, 'axes': None, 'fig': None,
+                'canvas': None, 'single': False},
+    }
 
     btn_col = ttk.Frame(palette)
     btn_col.pack(side='top', fill='x', padx=4, pady=(4, 2))
@@ -317,11 +321,9 @@ def showImage(image_defs, sw, sh, switch_infos=None):
     profile_btn = ttk.Button(btn_col, text='Profile')
     col_btn     = ttk.Button(btn_col, text='Col Plot')
     row_btn     = ttk.Button(btn_col, text='Row Plot')
-    single_btn  = ttk.Button(btn_col, text='Single Plot')
     lines_btn   = ttk.Button(btn_col, text='Lines ✓')
     quit_btn    = ttk.Button(btn_col, text='Quit', command=root.destroy)
-    for btn in (pick_btn, profile_btn, col_btn, row_btn, single_btn,
-                lines_btn, quit_btn):
+    for btn in (pick_btn, profile_btn, col_btn, row_btn, lines_btn, quit_btn):
         btn.pack(side='top', fill='x', pady=2, padx=2)
 
     ttk.Separator(btn_col, orient='horizontal').pack(fill='x', pady=(4, 2))
@@ -409,62 +411,76 @@ def showImage(image_defs, sw, sh, switch_infos=None):
             overlay_set_visible[0](lines_visible[0])
     lines_btn.config(command=toggle_lines)
 
-    def toggle_single():
-        singlePlot_active[0] = not singlePlot_active[0]
-        single_btn.config(
-            text='Single ✓' if singlePlot_active[0] else 'Single Plot')
-        # Close any open plot window; next click opens a fresh one in the new mode
-        if _lineplotWinAlive():
-            lineplot_state['win'].destroy()
-    single_btn.config(command=toggle_single)
-
-    def _lineplotWinAlive():
-        win = lineplot_state['win']
-        if win is None:
-            return False
-        try:
-            return bool(win.winfo_exists())
-        except Exception:
-            return False
-
     def openOrReuseLineplot(mode):
         import matplotlib.figure as mfig
-        single = singlePlot_active[0]
-        need_new = (not _lineplotWinAlive()
-                    or lineplot_state['mode'] != mode
-                    or lineplot_state['single'] != single)
-        if need_new:
-            if _lineplotWinAlive():
-                lineplot_state['win'].destroy()
-            win = tk.Toplevel()
-            title_suffix = ' [single axis]' if single else ''
-            win.title(('Column Plots' if mode == 'col' else 'Row Plots')
-                      + title_suffix)
-            WIN_W = 800
-            BTN_H = 46
-            WIN_H = 400 if single else 200 + 200 * n_imgs
-            x, y = nextPlotGeometry(WIN_W, WIN_H)
-            win.geometry(f'{WIN_W}x{WIN_H}+{x}+{y}')
-            fig = mfig.Figure(figsize=(8, (WIN_H - BTN_H) / DPI), dpi=DPI)
-            x_label = 'Row index' if mode == 'col' else 'Column index'
+        state = plot_states[mode]
+        x_label = 'Row index' if mode == 'col' else 'Column index'
+        WIN_W = 800
+        BTN_H = 46
+
+        def _is_alive():
+            w = state['win']
+            if w is None:
+                return False
+            try:
+                return bool(w.winfo_exists())
+            except Exception:
+                return False
+
+        def _build_axes(fig, single):
+            fig.clf()
             if single:
                 ax = fig.add_subplot(1, 1, 1)
                 ax.grid(True, alpha=0.4)
                 ax.set_xlabel(x_label)
                 ax.set_ylabel('Value')
-                axes = [ax]
+                state['axes'] = [ax]
             else:
-                axes = []
+                state['axes'] = []
                 for i, idef in enumerate(image_defs):
                     ax = fig.add_subplot(n_imgs, 1, i + 1)
                     ax.grid(True, alpha=0.4)
                     ax.set_xlabel(x_label)
                     ax.set_ylabel('Value')
                     ax.set_title(idef['title'], fontsize=8)
-                    axes.append(ax)
+                    state['axes'].append(ax)
             fig.tight_layout()
+
+        def _clear_mode_overlays():
+            items = col_overlay_items if mode == 'col' else row_overlay_items
+            for cv, item in items:
+                cv.delete(item)
+            items.clear()
+
+        if not _is_alive():
+            single = state['single']
+            WIN_H = 400 if single else 200 + 200 * n_imgs
+            x, y = nextPlotGeometry(WIN_W, WIN_H)
+            win = tk.Toplevel()
+            win.title('Column Plots' if mode == 'col' else 'Row Plots')
+            win.geometry(f'{WIN_W}x{WIN_H}+{x}+{y}')
+            fig = mfig.Figure(figsize=(8, (WIN_H - BTN_H) / DPI), dpi=DPI)
+            _build_axes(fig, single)
+
             btn_frame = ttk.Frame(win)
             btn_frame.pack(side='bottom', fill='x', padx=4, pady=6)
+
+            single_win_btn = ttk.Button(
+                btn_frame,
+                text='Single ✓' if single else 'Single')
+
+            def toggle_single_win():
+                state['single'] = not state['single']
+                single_win_btn.config(
+                    text='Single ✓' if state['single'] else 'Single')
+                _clear_mode_overlays()
+                _build_axes(state['fig'], state['single'])
+                state['canvas'].draw()
+                new_h = 400 if state['single'] else 200 + 200 * n_imgs
+                state['win'].geometry(f'{WIN_W}x{new_h}')
+
+            single_win_btn.config(command=toggle_single_win)
+            single_win_btn.pack(side='left', padx=4)
 
             def save_plot():
                 from tkinter import filedialog
@@ -474,26 +490,21 @@ def showImage(image_defs, sw, sh, switch_infos=None):
                     filetypes=[('PNG', '*.png'), ('PDF', '*.pdf'),
                                ('SVG', '*.svg'), ('All files', '*.*')])
                 if path:
-                    lineplot_state['fig'].savefig(path, bbox_inches='tight')
+                    state['fig'].savefig(path, bbox_inches='tight')
 
             def clear_plots():
-                x_lbl = ('Row index' if lineplot_state['mode'] == 'col'
-                          else 'Column index')
                 seen = set()
-                for ax in lineplot_state['axes']:
+                for ax in state['axes']:
                     if id(ax) in seen:
                         continue
                     seen.add(id(ax))
                     ax.cla()
                     ax.grid(True, alpha=0.4)
-                    ax.set_xlabel(x_lbl)
+                    ax.set_xlabel(x_label)
                     ax.set_ylabel('Value')
-                lineplot_state['fig'].tight_layout()
-                lineplot_state['canvas'].draw_idle()
-                # Also remove col/row overlay lines from image canvases
-                for cv, item in colrow_overlay_items:
-                    cv.delete(item)
-                colrow_overlay_items.clear()
+                state['fig'].tight_layout()
+                state['canvas'].draw_idle()
+                _clear_mode_overlays()
 
             ttk.Button(btn_frame, text='Save', command=save_plot).pack(side='left', padx=4)
             ttk.Button(btn_frame, text='Clear', command=clear_plots).pack(side='left', padx=4)
@@ -501,16 +512,15 @@ def showImage(image_defs, sw, sh, switch_infos=None):
             canvas = FigureCanvasTkAgg(fig, master=win)
             canvas.draw()
             canvas.get_tk_widget().pack(fill='both', expand=True)
-            lineplot_state.update({'win': win, 'axes': axes, 'fig': fig,
-                                   'canvas': canvas, 'mode': mode,
-                                   'single': single})
-        return lineplot_state['axes'], lineplot_state['fig'], lineplot_state['canvas']
+            state.update({'win': win, 'fig': fig, 'canvas': canvas})
+
+        return state['axes'], state['fig'], state['canvas']
 
     def doColPlot(col):
         axes, fig, canvas = openOrReuseLineplot('col')
         rows = np.arange(ny)
         colors = []
-        single = lineplot_state['single']
+        single = plot_states['col']['single']
         for i, idef in enumerate(image_defs):
             ax = axes[0] if single else axes[i]
             pfx = f'{i+1}: ' if single else ''
@@ -533,7 +543,7 @@ def showImage(image_defs, sw, sh, switch_infos=None):
         axes, fig, canvas = openOrReuseLineplot('row')
         cols_arr = np.arange(nx)
         colors = []
-        single = lineplot_state['single']
+        single = plot_states['row']['single']
         for i, idef in enumerate(image_defs):
             ax = axes[0] if single else axes[i]
             pfx = f'{i+1}: ' if single else ''
@@ -680,7 +690,8 @@ def showImage(image_defs, sw, sh, switch_infos=None):
 
     # ---- overlay helpers (items stored as (canvas, item_id) pairs) ----
     profile_overlay_items = []
-    colrow_overlay_items  = []
+    col_overlay_items     = []   # vertical lines from Col Plot clicks
+    row_overlay_items     = []   # horizontal lines from Row Plot clicks
 
     def clear_overlay():
         for canvas, item in profile_overlay_items:
@@ -707,17 +718,18 @@ def showImage(image_defs, sw, sh, switch_infos=None):
     def draw_col_line(col, colors):
         for canvas, color in zip(all_canvases, colors):
             item = canvas.create_line(col, 0, col, ny - 1, fill=color, width=1)
-            _add_canvas_item(canvas, item, colrow_overlay_items)
+            _add_canvas_item(canvas, item, col_overlay_items)
 
     def draw_row_line(row, colors):
         for canvas, color in zip(all_canvases, colors):
             item = canvas.create_line(0, row, nx - 1, row, fill=color, width=1)
-            _add_canvas_item(canvas, item, colrow_overlay_items)
+            _add_canvas_item(canvas, item, row_overlay_items)
 
     def canvas_set_visible(v):
-        state = 'normal' if v else 'hidden'
-        for canvas, item in profile_overlay_items + colrow_overlay_items:
-            canvas.itemconfigure(item, state=state)
+        vis = 'normal' if v else 'hidden'
+        for canvas, item in (profile_overlay_items
+                              + col_overlay_items + row_overlay_items):
+            canvas.itemconfigure(item, state=vis)
     overlay_set_visible[0] = canvas_set_visible
 
     # ---- click handler (bound to all canvases) ----
