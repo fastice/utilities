@@ -399,7 +399,7 @@ def showImage(image_defs, sw, sh):
         rows = np.arange(ny)
         colors = []
         for idef, ax in zip(image_defs, axes):
-            dec = idef['dec']
+            dec = idef.get('raw', idef['dec'])
             if dec.ndim == 2:
                 line, = ax.plot(rows, dec[:, col], label=f'col {col}')
                 colors.append(line.get_color())
@@ -419,7 +419,7 @@ def showImage(image_defs, sw, sh):
         cols_arr = np.arange(nx)
         colors = []
         for idef, ax in zip(image_defs, axes):
-            dec = idef['dec']
+            dec = idef.get('raw', idef['dec'])
             if dec.ndim == 2:
                 line, = ax.plot(cols_arr, dec[row, :], label=f'row {row}')
                 colors.append(line.get_color())
@@ -438,7 +438,7 @@ def showImage(image_defs, sw, sh):
         if 0 <= row < ny and 0 <= col < nx:
             val_parts = []
             for i, idef in enumerate(image_defs):
-                dec = idef['dec']
+                dec = idef.get('raw', idef['dec'])
                 if dec.ndim == 2:
                     val_parts.append(f'val{i+1}={dec[row, col]:.6g}')
                 else:
@@ -616,7 +616,7 @@ def showImage(image_defs, sw, sh):
                 draw_marker(col, row)
                 p0, p1 = profile_pts
                 draw_profile_line(p0[1], p0[0], p1[1], p1[0])
-                dv        = [extractProfile(d['dec'], p0[0], p0[1], p1[0], p1[1])
+                dv        = [extractProfile(d.get('raw', d['dec']), p0[0], p0[1], p1[0], p1[1])
                              for d in image_defs]
                 dist      = dv[0][0]
                 vals_list = [x[1] for x in dv]
@@ -737,11 +737,13 @@ def main():
         if args.log:
             sv_min = args.vmin if args.vmin is not None else 1.0
             sv_max = args.vmax if args.vmax is not None else 3000.0
+            raw = dec.copy()
             dec = hsvSpeedRender(dec, sv_min, sv_max)
             print(f'{f}: {nx}×{ny} px, speed log HSV {sv_min}–{sv_max} m/yr, '
                   f'decimation ×{factor}')
             image_defs.append({
                 'dec': dec,
+                'raw': raw,
                 'title': f'speed log HSV: {f}',
                 'cmap': args.cmap,
                 'vmin': None,
