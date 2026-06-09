@@ -50,6 +50,26 @@ def readBand(ds, b):
     return data
 
 
+def hsvSpeedRender(speed, vmin=1.0, vmax=3000.0):
+    """Log-scaled HSV speed rendering; replicates nisarBase2D.hsvSpeedRender.
+
+    Returns float32 RGB array (ny, nx, 3) with values in [0, 1].
+    Hue = log position in [vmin, vmax]; saturation fades to white below ~125 m/yr;
+    NaN pixels are forced to white (saturation = 0).
+    """
+    from matplotlib import colors as mcolors
+    background = np.isnan(speed)
+    value = np.ones(speed.shape, dtype=np.float32)
+    saturation = np.clip((speed / 125.0 + 0.5) / 1.5, 0, 1).astype(np.float32)
+    saturation[background] = 0
+    # denominator mixes log10(vmax) and natural log(vmin) — matches original
+    hue = (np.log10(np.clip(speed, vmin, vmax)) /
+           (np.log10(vmax) - np.log(vmin))).astype(np.float32)
+    hue = np.nan_to_num(hue, nan=0.0)
+    hsv = np.moveaxis(np.array([hue, saturation, value]), 0, 2)
+    return mcolors.hsv_to_rgb(hsv).astype(np.float32)
+
+
 def extractProfile(dec, r0, c0, r1, c1):
     """Sample dec along the line from (r0,c0) to (r1,c1) using bilinear interpolation."""
     length = max(int(np.hypot(r1 - r0, c1 - c0)), 1) + 1
@@ -660,10 +680,15 @@ def main():
     parser.add_argument('--mod', type=float, default=None, metavar='X',
                         help='Display image modulo X '
                              '(default: 100 with --vel, off otherwise)')
+    parser.add_argument('--log', action='store_true',
+                        help='With --vel: log-scaled HSV rendering (vmin=1, vmax=3000 m/yr; '
+                             'override with --vmin/--vmax)')
     args = parser.parse_args()
 
     if args.vel and len(args.files) != 1:
         sys.exit('--vel requires exactly one input file')
+    if args.log and not args.vel:
+        sys.exit('--log requires --vel')
     if not args.vel and len(args.files) > 3:
         sys.exit('showimage: at most 3 files can be displayed simultaneously')
 
@@ -709,18 +734,34 @@ def main():
         speed = np.where(np.isfinite(vx) & np.isfinite(vy),
                          np.sqrt(vx**2 + vy**2), np.nan)
         dec = blockAverage(speed, factor)
-        dec = np.where(np.isfinite(dec), dec % mod_val, dec)
-        vmin = args.vmin if args.vmin is not None else 0.0
-        vmax = args.vmax if args.vmax is not None else mod_val
-        print(f'{f}: {nx}×{ny} px, speed from bands 1+2, mod {mod_val:.4g}, decimation ×{factor}')
-        image_defs.append({
-            'dec': dec,
-            'title': f'speed mod {mod_val:.4g}: {f}',
-            'cmap': args.cmap,
-            'vmin': vmin,
-            'vmax': vmax,
-            'is_rgb': False,
-        })
+        if args.log:
+            sv_min = args.vmin if args.vmin is not None else 1.0
+            sv_max = args.vmax if args.vmax is not None else 3000.0
+            dec = hsvSpeedRender(dec, sv_min, sv_max)
+            print(f'{f}: {nx}×{ny} px, speed log HSV {sv_min}–{sv_max} m/yr, '
+                  f'decimation ×{factor}')
+            image_defs.append({
+                'dec': dec,
+                'title': f'speed log HSV: {f}',
+                'cmap': args.cmap,
+                'vmin': None,
+                'vmax': None,
+                'is_rgb': True,
+            })
+        else:
+            dec = np.where(np.isfinite(dec), dec % mod_val, dec)
+            vmin = args.vmin if args.vmin is not None else 0.0
+            vmax = args.vmax if args.vmax is not None else mod_val
+            print(f'{f}: {nx}×{ny} px, speed from bands 1+2, mod {mod_val:.4g}, '
+                  f'decimation ×{factor}')
+            image_defs.append({
+                'dec': dec,
+                'title': f'speed mod {mod_val:.4g}: {f}',
+                'cmap': args.cmap,
+                'vmin': vmin,
+                'vmax': vmax,
+                'is_rgb': False,
+            })
     else:
         for ds, f in zip(datasets, args.files):
             nb = ds.RasterCount
