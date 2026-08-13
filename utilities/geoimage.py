@@ -4,15 +4,46 @@ from scipy.interpolate import RegularGridInterpolator
 from utilities.readImage import readImage
 from utilities.writeImage import writeImage
 from utilities.myerror import myerror
+from utilities.mywarning import mywarning
 from utilities import geodat
 import os
-# from osgeo.gdalconst import *
 from osgeo import gdal, gdal_array, osr
 from datetime import datetime
 
-# -------------------------------------------------------------------------
-# class defintion for an image object, which covers PS data as geodat or tiff
-# ------------------------------------------------------------------------
+# Per-type configuration: components, file suffixes, geodat suffix, magnitude attribute name.
+# 'magAttr' is the attribute that stores the magnitude (None for scalar).
+_TYPE_CONFIG = {
+    'scalar':     {'components': ['x'],        'suffixes': [''],
+                   'geodatSuffix': '.geodat',    'magAttr': None},
+    'velocity':   {'components': ['vx', 'vy'], 'suffixes': ['.vx', '.vy'],
+                   'geodatSuffix': '.vx.geodat', 'magAttr': 'v'},
+    'velocityRA': {'components': ['vr', 'va'], 'suffixes': ['.vr', '.va'],
+                   'geodatSuffix': '.vr.geodat', 'magAttr': 'v'},
+    'error':      {'components': ['ex', 'ey'], 'suffixes': ['.ex', '.ey'],
+                   'geodatSuffix': '.ex.geodat', 'magAttr': 'e'},
+    'errorRA':    {'components': ['er', 'ea'], 'suffixes': ['.er', '.ea'],
+                   'geodatSuffix': '.er.geodat', 'magAttr': 'e'},
+}
+
+# noData values keyed by file suffix (used in writeCloudOptGeo)
+_NO_DATA = {
+    '.vx': -2.0e9, '.vy': -2.0e9,
+    '.vr': -2.0e9, '.va': -2.0e9,
+    '.v':  -1.0,
+    '.ex': -1.0,   '.ey': -1.0,
+    '.er': -1.0,   '.ea': -1.0,
+    '.e':  -1.0,
+    '':    None,
+}
+
+
+def _tiffName(fileName, suffix):
+    ''' build fileName + suffix + '.tif', but avoid a redundant
+    '.tif.tif' when fileName is already a .tif and suffix is empty
+    (i.e., a scalar geoType with no per-component suffix) '''
+    if suffix == '' and fileName.endswith('.tif'):
+        return fileName
+    return fileName + suffix + '.tif'
 
 
 class geoimage:
@@ -23,6 +54,7 @@ class geoimage:
 
         self.x = []
         self.vx, self.vy, self.v = [], [], []
+        self.vr, self.va = [], []
         self.ex, self.ey, self.e = [], [], []
         self.geo = []
         self.xx, self.yy = [], []
@@ -52,44 +84,27 @@ class geoimage:
             if self.verbose:
                 print('Type ', self.geoType)
 
-    # -------------------------------------------------------------------------
-    # Set and errorcheck geotype
-    # -------------------------------------------------------------------------
     def setGeoType(self, geoType):
-        """ setGeoType(geoType) set type to velocity or scalar"""
-        types = ['scalar', 'velocity', 'error']
-        if geoType not in types:
+        """ setGeoType(geoType) set type to velocity, velocityRA, error, or scalar"""
+        if geoType not in _TYPE_CONFIG:
             print(f'\n\n\tgeoImage setType, invalid type: {geoType}\n\n')
             exit()
         self.geoType = geoType
 
-    # -------------------------------------------------------------------------
-    # def setup xy limits
-    # -------------------------------------------------------------------------
     def xyCoordinates(self):
         """ xyCoordinates - setup xy coordinates in km """
-        #
         sx, sy = self.geo.sizeInPixels()
         x0, y0 = self.geo.originInKm()
         dx, dy = self.geo.pixSizeInKm()
-        # remember arange will not generate value for sx*dx (its doing sx-1)
         self.xx = np.arange(x0, x0+sx*dx, dx)
         self.yy = np.arange(y0, y0+sy*dy, dy)
-        # force the right length
         self.xx, self.yy = self.xx[0:sx], self.yy[0:sy]
         self.extent = [min(self.xx), max(self.xx), min(self.yy), max(self.yy)]
 
-    # -------------------------------------------------------------------------
-    # Compute matrix of xy grid points
-    # -------------------------------------------------------------------------
     def xyGrid(self):
-        #
-        # if one done grid points not computed, then compute
         if len(self.xx) == 0:
             self.xyCoordinates()
         sx, sy = self.geo.sizeInPixels()
-        #
-        # setup array
         self.xGrid, self.yGrid = np.zeros((sy, sx)), np.zeros((sy, sx))
         for i in range(0, sy):
             self.xGrid[i, :] = self.xx
@@ -112,7 +127,6 @@ class geoimage:
         return dates[0]+(dates[1]-dates[0])*0.5
 
     def parseVelCentralDate(self):
-
         if self.fileName is None:
             metaFile = self.fileName + '.meta'
             if not os.path.exists(metaFile):
@@ -120,89 +134,48 @@ class geoimage:
             return self.parseMyMeta(metaFile)
         return None
 
-    # -------------------------------------------------------------------------
-    #  setup interpolation functions
-    # -------------------------------------------------------------------------
-
     def setupInterp(self, method='linear'):
-        """ set up interpolation for scalar (xInterp) or velocity/eror
-        (vxInterp, vyInterp, vInterp)  """
-    #
+        """ set up interpolation for scalar (xInterp) or two-component types """
         if len(self.xx) < 0:
             myerror('\n\nsetupInterp: x, y limits not set\n\n')
-        #
-        # setup interp - flip xy for row colum
-        #
         xy = (self.yy, self.xx)
+        cfg = _TYPE_CONFIG[self.geoType]
+        for comp in cfg['components']:
+            setattr(self, f'{comp}Interp',
+                    RegularGridInterpolator(xy, getattr(self, comp), method=method))
+        if cfg['magAttr']:
+            setattr(self, f'{cfg["magAttr"]}Interp',
+                    RegularGridInterpolator(xy, getattr(self, cfg['magAttr']), method=method))
 
-        if self.geoType == 'scalar':
-            self.xInterp = RegularGridInterpolator(xy,
-                                                   self.x, method=method)
-        if self.geoType == 'velocity':
-            self.vxInterp = RegularGridInterpolator(xy,
-                                                    self.vx, method=method)
-            self.vyInterp = RegularGridInterpolator(xy,
-                                                    self.vy, method=method)
-            self.vInterp = RegularGridInterpolator(xy, self.v, method=method)
-        if self.geoType == 'error':
-            self.exInterp = RegularGridInterpolator(xy,
-                                                    self.ex, method=method)
-            self.eyInterp = RegularGridInterpolator(xy,
-                                                    self.ey, method=method)
-            self.eInterp = RegularGridInterpolator(xy, self.e, method=method)
-
-    # -------------------------------------------------------------------------
-    # interpolate geo image
-    # -------------------------------------------------------------------------
     def interpGeo(self, x, y):
         """ interpolate velocity or x at points x and y, which are in km
-        (note x,y is c-r even though data r-c)"""
-        # save the original shape
+        (note x,y is c-r even though data r-c).
+        Returns: scalar → single array; others → tuple(comp0, comp1, mag) """
         shapeSave = x.shape
-        # flatten and do bounds check
         x1 = x.flatten()
         y1 = y.flatten()
         xgood = np.logical_and(x1 >= self.xx[0], x1 <= self.xx[-1])
         ygood = np.logical_and(y1 >= self.yy[0], y1 <= self.yy[-1])
         igood = np.logical_and(xgood, ygood)
-        #
-        # save inbound locations
         xy = np.array([y1[igood], x1[igood]]).transpose()
-        #
+
+        cfg = _TYPE_CONFIG[self.geoType]
+
         if self.geoType == 'scalar':
-            result = np.zeros(x1.transpose().shape)
-            result[:] = np.NaN
+            result = np.full(x1.shape, np.nan)
             result[igood] = self.xInterp(xy)
-            result = np.reshape(result, shapeSave)
-            return result
-        elif self.geoType == 'velocity':
-            # empty arrays the right size
-            vxr = np.zeros(x1.transpose().shape)
-            vxr[:] = np.NaN
-            vyr = vxr.copy()
-            vr = vxr.copy()
-            # interpolate in bounds
-            vxr[igood] = self.vxInterp(xy)
-            vyr[igood] = self.vyInterp(xy)
-            vr[igood] = self.vInterp(xy)
-            vxr = np.reshape(vxr, shapeSave)
-            vyr = np.reshape(vyr, shapeSave)
-            vr = np.reshape(vr, shapeSave)
-            return vxr, vyr, vr
-        elif self.geoType == 'error':
-            # empty arrays the right size
-            exr = np.zeros(x1.transpose().shape)
-            exr[:] = np.NaN
-            eyr = exr.copy()
-            er = exr.copy()
-            # interpolate in bounds
-            exr[igood] = self.exInterp(xy)
-            eyr[igood] = self.eyInterp(xy)
-            er[igood] = self.eInterp(xy)
-            exr = np.reshape(exr, shapeSave)
-            eyr = np.reshape(eyr, shapeSave)
-            er = np.reshape(er, shapeSave)
-            return exr, eyr, er
+            return np.reshape(result, shapeSave)
+
+        results = []
+        for comp in cfg['components']:
+            r = np.full(x1.shape, np.nan)
+            r[igood] = getattr(self, f'{comp}Interp')(xy)
+            results.append(np.reshape(r, shapeSave))
+        if cfg['magAttr']:
+            mag = np.full(x1.shape, np.nan)
+            mag[igood] = getattr(self, f'{cfg["magAttr"]}Interp')(xy)
+            results.append(np.reshape(mag, shapeSave))
+        return tuple(results)
 
     def readGeodat(self, geoFile):
         if self.verbose:
@@ -214,18 +187,42 @@ class geoimage:
         else:
             myerror('Missing geodat file '+geoFile)
 
-    def readMyTiff(self, tiffFile):
+    def readMyTiff(self, tiffFile, band=1):
         """ read a tiff file and return the array """
         try:
             gdal.AllRegister()
             ds = gdal.Open(tiffFile)
-            band = ds.GetRasterBand(1)
+            band = ds.GetRasterBand(band)
             arr = band.ReadAsArray()
             arr = np.flipud(arr)
             ds = None
         except Exception:
             myerror("geoimage.readMyTiff: error reading tiff file "+tiffFile)
         return arr
+
+    def _multibandComponents(self, fileName):
+        """ If fileName is itself a single GDAL raster with one band per
+        component of the current geoType (matched by band Description, e.g.
+        'vx'/'vy' for velocity), return {component: bandIndex}. Otherwise
+        return None. Lets a single multi-band file (e.g. a modern VRT
+        wrapping a velocity map as vx/vy bands) stand in for the usual
+        per-component .tif files -- see readData(). """
+        cfg = _TYPE_CONFIG[self.geoType]
+        try:
+            ds = gdal.Open(fileName)
+        except Exception:
+            return None
+        if ds is None:
+            return None
+        bandMap = {}
+        for b in range(1, ds.RasterCount + 1):
+            desc = ds.GetRasterBand(b).GetDescription()
+            if desc in cfg['components']:
+                bandMap[desc] = b
+        ds = None
+        if len(bandMap) == len(cfg['components']):
+            return bandMap
+        return None
 
     def getWKT_PROJ(self, epsgCode, wktFile):
         ''' get wkt'''
@@ -245,15 +242,14 @@ class geoimage:
             return fp.readline()
 
     def imageSize(self):
-        typeDict = {'scalar': self.x, 'velocity': self.vx, 'error': self.ex}
-        ny, nx = typeDict[self.geoType].shape
+        firstComp = _TYPE_CONFIG[self.geoType]['components'][0]
+        ny, nx = getattr(self, firstComp).shape
         return nx, ny
 
     def computePixEdgeCornersXYM(self):
         nx, ny = self.imageSize()
         x0, y0 = self.geo.originInM()
         dx, dy = self.geo.pixSizeInM()
-        # print(x0, y0, nx, ny, dx, dy)
         xll, yll = x0 - dx/2, y0 - dx/2
         xur, yur = xll + nx * dx, yll + ny * dy
         xul, yul = xll, yur
@@ -271,41 +267,31 @@ class geoimage:
             llcorners[myKey] = {'lat': lat[0], 'lon': lon[0]}
         return llcorners
 
-    # -------------------------------------------------------------------------
-    # write My Tiff
-    # ------------------------------------------------------------------------
-
-
     def writeMyTiff(self, tiffFile, epsg=None, noDataDefault=None,
                     predictor='YES', noV=False, overviews=None,
                     driverName='COG', wktFile=None, computeStats=True,
                     resampling='AVERAGE', bigTiff=False):
-        """ write a geotiff file  - NEEDS MODIFICATION FOR EPSG AND VX,EX
-            Note: tiffFile should not have a ".tif" extension - one will be
-            added.
-            overviews should be of form [2, 4...]
-        """
-        # define various set up stuff
-        suffixDict = {'scalar': [''], 'velocity': ['.vx', '.vy', '.v'],
-                      'error': ['.ex', '.ey']}
-        typeDict = {'scalar': self.x, 'velocity': self.vx, 'error': self.ex}
-        # predictor = [int(predictor), 1][predictor > 3 or predictor < 1]
+        """ write geotiff(s) for this geoimage.
+        tiffFile should not have a '.tif' extension. """
+        cfg = _TYPE_CONFIG[self.geoType]
         if wktFile is None:
             epsg = [epsg, 3413][epsg is None]
+        firstComp = getattr(self, cfg['components'][0])
         try:
-            suffixes = suffixDict[self.geoType]
-            gdalType = gdal_array.NumericTypeCodeToGDALTypeCode(
-                typeDict[self.geoType].dtype)
+            gdalType = gdal_array.NumericTypeCodeToGDALTypeCode(firstComp.dtype)
         except Exception:
             myerror('writeMyTiff: invalid geoType ' + self.geoType)
-        #
+
+        suffixes = list(cfg['suffixes'])
+        if cfg['magAttr'] == 'v':
+            suffixes.append('.v')
+        elif cfg['magAttr'] == 'e':
+            suffixes.append('.e')
+
         try:
-            # Loop through different components, also write vmag for velocity
             for suffix in suffixes:
-                # skip .v if requested
-                if noV and suffix == '.v':
+                if noV and suffix in ('.v', '.e'):
                     continue
-                # write the geotiff
                 self.writeCloudOptGeo(tiffFile, suffix, epsg, gdalType,
                                       overviews=overviews, predictor=predictor,
                                       noDataDefault=noDataDefault,
@@ -319,50 +305,46 @@ class geoimage:
                          overviews=None, predictor='YES', noDataDefault=None,
                          bigTiff=False, driverName='COG', wktFile=None,
                          computeStats=True, resampling='AVERAGE'):
-        ''' write a cloudoptimized geotiff with overviews.
-        Set format to GTiff for a plain geotiff '''
-
+        ''' write a cloud-optimized or plain geotiff.
+        Set driverName to GTiff for a plain geotiff '''
         if driverName not in ['COG', 'GTiff']:
             myerror(f'invalid driver for writeCloudOptGeo {driverName}')
-        # no data info
-        noData = {'.vx': -2.0e9, '.vy': -2.0e9, '.v': -1.0,
-                  '.ex': -1.0, '.ey': -1.0, '': noDataDefault}[suffix]
-        #
-        # use a temp mem driver for CO geo
+        noData = _NO_DATA.get(suffix, noDataDefault)
         driver = gdal.GetDriverByName("MEM")
         nx, ny = self.imageSize()
         dx, dy = self.geo.pixSizeInM()
         dst_ds = driver.Create('', nx, ny, 1, gdalType)
-        # set geometry
         tiffCorners = self.computePixEdgeCornersXYM()
         dst_ds.SetGeoTransform((tiffCorners['ul']['x'], dx, 0,
                                 tiffCorners['ul']['y'], 0, -dy))
-        # set projection
         wkt = self.getWKT_PROJ(epsg, wktFile)
-        #
         dst_ds.SetProjection(wkt)
-        # set nodata
         if noData is not None:
             if self.geoType == 'scalar':
                 tmp = self.x
-            else:  # vx, vy etc
+            else:
                 tmp = getattr(self, suffix.replace('.', ''))
             tmp[np.isnan(tmp)] = noData
             dst_ds.GetRasterBand(1).SetNoDataValue(noData)
-        # write data
         if self.geoType == 'scalar':
             dst_ds.GetRasterBand(1).WriteArray(np.flipud(self.x))
         else:
             dst_ds.GetRasterBand(1).WriteArray(
                 np.flipud(getattr(self, suffix.replace('.', ''))))
-        # compute statistics, which should embed in file.
         if computeStats:
-            _ = dst_ds.GetRasterBand(1).GetStatistics(0, 1)
-        #
+            # An all-noData band (e.g. a velocityStats mean whose only
+            # contributors were blank Exclude.pending maps) makes
+            # GetStatistics raise -- degrade to a no-stats write rather than
+            # letting writeMyTiff's blanket except turn it into a fatal
+            # myerror for the whole program.
+            try:
+                _ = dst_ds.GetRasterBand(1).GetStatistics(0, 1)
+            except RuntimeError:
+                mywarning(f'writeCloudOptGeo: no valid pixels for statistics '
+                          f'in {tiffFile}{suffix} -- writing without stats')
         bigTiffFlag = ["NO", "YES"][bigTiff]
         options = [f'BIGTIFF={bigTiffFlag}', 'COMPRESS=LZW']
-        # driver specific stuff
-        if driverName == 'GTiff':  # GTiff options
+        if driverName == 'GTiff':
             if type(predictor) != int and predictor is not None:
                 options.append(f'PREDICTOR={1}')
             if overviews is not None:
@@ -370,23 +352,40 @@ class geoimage:
                     myerror(f'Overviews {overviews} should be [2, 4, ..])')
                 options.append('COPY_SRC_OVERVIEWS=YES')
                 dst_ds.BuildOverviews(resampling, overviews)
-        else:  # COG OPTIONS
-            options.append('GEOTIFF_VERSION=1.1')
+        else:
             options.append('GEOTIFF_VERSION=1.1')
             options.append(f'RESAMPLING={resampling}')
             if predictor in ['YES', 'NO']:
                 options.append(f'PREDICTOR={predictor}')
-        #
-        # now copy to a geotiff - mem -> geotiff forces correct order
-        # for c opt geotiff
         dst_ds.FlushCache()
         driver = gdal.GetDriverByName(driverName)
-        # Create copy for the COG.
-        dst_ds2 = driver.CreateCopy(f'{tiffFile}{suffix}.tif', dst_ds,
+        dst_ds2 = driver.CreateCopy(_tiffName(tiffFile, suffix), dst_ds,
                                     options=options)
         dst_ds2.FlushCache()
-        # free memory
         dst_ds, dst_ds2 = None, None
+
+    def writeMyVrt(self, tiffFile, vrtFile=None):
+        """ Build a multi-band VRT (tiffFile + '.vrt', or vrtFile if given)
+        wrapping the per-component GeoTIFFs already written by writeMyTiff(),
+        one band per component (magnitude excluded), with each band's
+        Description set to its component name (e.g. 'vr'/'va') -- matches the
+        vx+vy/vr+va/ex+ey-pair VRT convention used elsewhere (e.g. mosaic3d's
+        write3DFlatVRTs()). tiffFile should not have a '.tif' extension.
+        vrtFile lets the VRT be named independently of the tiff basename
+        (e.g. a sigma pair sharing froot with the mean pair needs its own
+        '<froot>.err.vrt' rather than colliding on '<froot>.vrt'). """
+        cfg = _TYPE_CONFIG[self.geoType]
+        if vrtFile is None:
+            vrtFile = tiffFile + '.vrt'
+        srcFiles = [_tiffName(tiffFile, s) for s in cfg['suffixes']]
+        # gdal.BuildVRT() already writes a correct relativeToVRT="1" source
+        # path when vrtFile and srcFiles share a directory (as they do here,
+        # both derived from the same tiffFile base) -- no post-processing needed.
+        vrt = gdal.BuildVRT(vrtFile, srcFiles, separate=True)
+        for i, comp in enumerate(cfg['components'], start=1):
+            vrt.GetRasterBand(i).SetMetadataItem('Description', comp)
+        vrt.FlushCache()
+        vrt = None
 
     def getDomain(self, epsg):
         if epsg is None or epsg == 3413:
@@ -398,25 +397,20 @@ class geoimage:
         return domain
 
     def getGeoFile(self, fileName, domain, vxMod=None, geoFile=None,
-                   tiff=False, wkt=None):
-        ''' determine the file name for geodat if not specified and
-        load geodat info'''
+                   tiff=False, wkt=None, multibandFile=None):
+        ''' determine the geodat file name and load geodat info '''
+        cfg = _TYPE_CONFIG[self.geoType]
         if not tiff:
-            suffixes = {'scalar': '.geodat', 'velocity': '.vx.geodat',
-                        'error': '.vx.geodat'}
+            if geoFile is None:
+                geoFile = fileName + cfg['geodatSuffix']
         else:
-            suffixes = {'scalar': '', 'velocity': '.vx.tif',
-                        'error': '.vx.tif'}
-            if vxMod is not None:
-                suffixes['error'] = vxMod
-                suffixes['velocity'] = vxMod
-        #
-        if geoFile is None:
-            try:
-                geoFile = fileName + suffixes[self.geoType]
-            except Exception:
-                myerror(f"geoimage.getGeoFile: Invalid type {self.geoType} ")
-        #
+            if geoFile is None:
+                if multibandFile is not None:
+                    geoFile = multibandFile
+                elif vxMod is not None and self.geoType in ('velocity', 'error'):
+                    geoFile = fileName + vxMod
+                else:
+                    geoFile = _tiffName(fileName, cfg['suffixes'][0])
         self.geo = geodat(verbose=self.verbose, domain=domain, wkt=wkt)
         if not tiff:
             self.geo.readGeodat(geoFile)
@@ -425,124 +419,89 @@ class geoimage:
         return geoFile
 
     def dataFileNames(self, fileName, tiff=None, vxMod=None):
-        ''' compute the file names that need to be read
-        For files with form ABCvxEFG.tif, use ABC for fileName and
-        vxMod=vxEFG.tif'''
+        ''' compute the file names to be read for all components '''
+        cfg = _TYPE_CONFIG[self.geoType]
         if not tiff:
-            suffixes = {'scalar': [''], 'velocity': ['.vx', '.vy'],
-                        'error': ['.ex', '.ey']}[self.geoType]
-        else:
-            suffixes = {'scalar': [''], 'velocity': ['.vx.tif', '.vy.tif'],
-                        'error': ['.ex.tif', '.ey.tif']}[self.geoType]
-            # if vxMod present, use it update the name
-            if vxMod is not None and self.geoType != 'scalar':
-                for i, component in zip([0, 1], ['x', 'y']):
-                    vMod = vxMod.replace('x', component)
-                    # v -> e for errors
-                    if self.geoType == 'error':
-                        vMod.replace('v', 'e')
-                    # replace the standard value with this updated vMod
-                    suffixes[i] = suffixes[i].replace(suffixes[i], vMod)
-        # now use file root to create file names
-        fileNames = []
-        for suffix in suffixes:
-            fileNames.append(fileName+suffix)
-#        print(fileNames)
-        return fileNames
+            return [fileName + s for s in cfg['suffixes']]
+        # legacy vxMod override for velocity/error tiff paths
+        if vxMod is not None and self.geoType in ('velocity', 'error'):
+            comps = ['x', 'y'] if self.geoType == 'velocity' else ['x', 'y']
+            new = []
+            for i, component in enumerate(comps):
+                vMod = vxMod.replace('x', component)
+                if self.geoType == 'error':
+                    vMod = vMod.replace('v', 'e')
+                new.append(vMod)
+            return [fileName + s for s in new]
+        return [_tiffName(fileName, s) for s in cfg['suffixes']]
 
-    def readFiles(self, fileNames, dType, tiff=False):
-        #  get the values that match the type
-        myTypes = {'scalar': ['x'], 'velocity': ['vx', 'vy'],
-                   'error': ['ex', 'ey']}[self.geoType]
-        minValue = {'scalar': -2.e9, 'velocity': -2.e9,
-                    'error': -2.e9}[self.geoType]
+    def readFiles(self, fileNames, dType, tiff=False, bandMap=None):
+        cfg = _TYPE_CONFIG[self.geoType]
+        minValue = -2.e9
         sx, sy = self.geo.sizeInPixels()
-        # loop over arrays and file names to read data
-        for myType, fileName in zip(myTypes, fileNames):
+        for comp, fileName in zip(cfg['components'], fileNames):
             if not tiff:
-                # print(fileName, sx, sy, dType)
                 myArray = readImage(fileName, sx, sy, dType)
+            elif bandMap is not None:
+                myArray = self.readMyTiff(fileName, band=bandMap[comp])
             else:
                 myArray = self.readMyTiff(fileName)
-            # handle no data nans if present
             if np.sum(np.isnan(myArray)) > 0:
                 myArray[np.isnan(myArray)] = np.nan
             elif isinstance(myArray[0, 0], np.floating):
-                # print(minValue)
                 myArray[myArray <= minValue] = np.nan
-            setattr(self, myType, myArray)
-        #
-        # compute mag for velocity and errors
-        if self.geoType == 'velocity':
-            self.v = np.sqrt(np.square(self.vx.astype(float)) +
-                             np.square(self.vy.astype(float)))
-        elif self.geoType == 'error':
-            self.e = np.sqrt(np.square(self.ex) + np.square(self.ey))
+            setattr(self, comp, myArray)
+        if cfg['magAttr']:
+            comps = [getattr(self, c).astype(float) for c in cfg['components']]
+            setattr(self, cfg['magAttr'],
+                    np.sqrt(sum(c**2 for c in comps)))
 
-    # -------------------------------------------------------------------------
-    # read geo image data
-    # -------------------------------------------------------------------------
     def readData(self, fileName, geoType=None, geoFile=None, dType='>f4',
                  tiff=False, epsg=None, vxMod=None, wktFile=None):
-        """ read Data for geo image
-        fileName=filename (or basename if velocity )
-        geoType =specify read 'velocity' or 'scalar' data
-        geoFile=geodatfile [fileName(.vx).geodat]
-        dType=type for scalar ['>f4']   ( 'f4','>f4','>u2','u2',
-        'u1','>i2','i2','>u4','u4','>i4','i4')"""
-        #
-        # error check type
+        """ Read geo image data.
+        fileName: file basename (suffixes appended automatically)
+        geoType: 'velocity', 'velocityRA', 'error', or 'scalar'
+        tiff: if True, read GeoTIFF and extract geodat from it.
+        If tiff and the usual per-component files (plain suffix.tif, or
+        vxMod-substituted names) aren't found on disk, falls back to
+        treating fileName itself as a single multi-band raster with one
+        band per component, matched by GDAL band Description (e.g. a
+        velocity map distributed as one VRT with 'vx'/'vy' bands rather
+        than separate .vx.tif/.vy.tif files) -- see _multibandComponents().
+        Backwards compatible: this fallback only triggers when the
+        existing per-component files are missing, so any setup that
+        already works is unaffected. """
         if geoType is not None:
             self.setGeoType(geoType)
-        #
-        # read geodat
         wkt = self.getWKT_PROJ(epsg, wktFile)
+        bandMap = None
+        if tiff and geoFile is None:
+            candidateNames = self.dataFileNames(fileName, tiff=tiff, vxMod=vxMod)
+            if not all(os.path.exists(f) for f in candidateNames):
+                bandMap = self._multibandComponents(fileName)
+        multibandFile = fileName if bandMap is not None else None
         geoFile = self.getGeoFile(fileName, self.getDomain(epsg), wkt=wkt,
-                                  geoFile=geoFile, tiff=tiff, vxMod=vxMod)
-        # compute coordinates for data
+                                  geoFile=geoFile, tiff=tiff, vxMod=vxMod,
+                                  multibandFile=multibandFile)
         self.xyCoordinates()
-        # get size
-        sx, sy = self.geo.sizeInPixels()
-        # read image (set no data to nan)
-        fileNames = self.dataFileNames(fileName, tiff=tiff, vxMod=vxMod)
-        # print(fileNames)
-        self.readFiles(fileNames, dType, tiff=tiff)
+        if bandMap is not None:
+            fileNames = [fileName] * len(bandMap)
+        else:
+            fileNames = self.dataFileNames(fileName, tiff=tiff, vxMod=vxMod)
+        self.readFiles(fileNames, dType, tiff=tiff, bandMap=bandMap)
 
-# -------------------------------------------------------------------------
-# read geo image data
-# -------------------------------------------------------------------------
     def writeData(self, fileName, geoType=None, geoFile=None, dType='>f4'):
-        """ read Data for geo image
-        fileName=filename (or basename if velocity )
-        geoType =specify read 'velocity' or 'scalar' data
-        geoFile=geodatfile [fileName(.vx).geodat]
-        dType=type for scalar ['>f4']   ( 'f4','>f4','>u2','u2','>i2',
-        'i2','>u4','u4','>i4','i4')"""
-        #
-        # force type change
+        """ Write binary flat files + geodat sidecars for all components. """
         if geoType is not None:
             self.setGeoType(geoType)
-        #
-        # write geodat, with suffix from this dict of possible types
-        suffix = {'scalar': 'geodat', 'velocity': 'vx.geodat',
-                  'error': 'ex.geodat'}
-        if geoFile is None:
-            geoFile = f'{fileName}.{suffix[self.geoType]}'
-        #
-        # helper to write image (set no data to nan)
 
-        def writeMyImage(myGeo, NaNVal, x, fileName, dType):
+        def writeMyImage(myGeo, NaNVal, x, outName, dType):
             if dType not in ['u1']:
                 x[np.isnan(x)] = NaNVal
-            writeImage(fileName, x, dType)
-            myGeo.writeGeodat(f'{fileName}.geodat')
-        #
-        # Use above funtion to write image for different types
-        if self.geoType == 'scalar':
-            writeMyImage(self.geo, -2.0e9, self.x, fileName, dType)
-        elif self.geoType == 'velocity':
-            writeMyImage(self.geo, -2.0e9, self.vx, fileName+'.vx', dType)
-            writeMyImage(self.geo, -2.0e9, self.vy, fileName+'.vy', dType)
-        elif self.geoType == 'error':
-            writeMyImage(self.geo, -2.0e9, self.ex, fileName+'.ex', dType)
-            writeMyImage(self.geo, -2.0e9, self.ey, fileName+'.ey', dType)
+            writeImage(outName, x, dType)
+            myGeo.writeGeodat(f'{outName}.geodat')
+
+        cfg = _TYPE_CONFIG[self.geoType]
+        for comp, suffix in zip(cfg['components'], cfg['suffixes']):
+            outName = fileName + suffix
+            writeMyImage(self.geo, -2.0e9, getattr(self, comp), outName, dType)

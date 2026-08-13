@@ -4,7 +4,7 @@ __all__ = ['dols', 'strip', 'popd', 'pushd', 'readImage', 'writeImage',
            'callMyProg', 'logger', 'processProfile', 'runvel', 'geoimage',
            'geodat', 'geodatrxa', 'writeLLtoRAformat', 'readLLtoRA',
            'offsets', 'lsdat', 'lsfit', 'makeMaskFromShape', 'getWKT_PROJ',
-           'shpplot']
+           'shpplot', 'globSort']
 from utilities.dols import dols
 from utilities.myerror import myerror
 from utilities.strip import strip
@@ -31,3 +31,4 @@ from utilities.myPrompt import myPrompt
 from utilities.callMyProg import callMyProg
 from utilities.logger import logger
 from utilities.processProfile import processProfile
+from utilities.globSort import globSort

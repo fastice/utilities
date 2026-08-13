@@ -16,7 +16,7 @@ class offsets:
     def __init__(self, fileRoot=None, rangeFile=None, latlon=None,
                  datFile=None, sigmaAFile=None, sigmaRFile=None,
                  matchTypeFile=None, geodatrxaFile=None, maskFile=None,
-                 verbose=True, myPath=None, vrtFile=None):
+                 verbose=True, myPath=None, vrtFile=None, tiff=False):
         '''
         Initialize offsets - defaults to setting up for azimuth.offsets
         fileRoot = specify name to read offsets in from fileRoot
@@ -53,6 +53,9 @@ class offsets:
         self.vrtFile = vrtFile
         self.vrtMatchFile = None
         self.maskVrtFile = None
+        # When True, writeOffsets/writeOffsetVrt emit GeoTIFF + tiff-backed VRTs
+        # instead of raw binary + VRTRawRasterBand (default off -> unchanged).
+        self.tiff = tiff
         #
         # in most cases all or no args would be passed.
         #
@@ -218,14 +221,14 @@ class offsets:
         else:
             self.latFile = self.offFilePath(latlon+'.lat')
             self.lonFile = self.offFilePath(latlon+'.lon')
-        # null files names if they don't exist
-        if not os.path.exists(self.latFile) \
-                or not os.path.exists(self.lonFile):
+        # warn if raw lat/lon files don't exist -- but not when a .ll.vrt
+        # counterpart is available (e.g. with -tiff simulations), since
+        # readLatlon() reads that instead and the raw files are never needed
+        if (not os.path.exists(self.latFile) or not os.path.exists(self.lonFile)) \
+                and not os.path.exists(self.latFile.replace('.lat', '.ll.vrt')):
             if self.verbose or True:
                 print('Warning: one or of these files do no exist ',
                       self.latFile, self.lonFile)
-            self.latFile = []
-            self.lonFile = []
 
     def readLatlon(self, latlon=None, datFile=None, vrtFile=None):
         '''
@@ -599,9 +602,16 @@ class offsets:
         #
         r = rasterio.open(vrtFile)
         self.meta = r.tags()
+        #print(self.meta)
+        #print(r.tags())
         # Get the mapping between band name and index
-        allBands = \
-            {r.tags(bidx=i)['Description']: i for i in range(1, r.count+1)}
+        try:
+            allBands = \
+                {r.tags(bidx=i)['Description']: i for i in range(1, r.count+1)}
+        except Exception:
+            # try again with descriptions
+            allBands = dict(zip(r.descriptions, range(1, r.count+1)))
+        #print(allBands)
         # Loop over requested variables
         for bandKey in bandTranslation:
             if bandKey in allBands:
@@ -621,18 +631,22 @@ class offsets:
         for key in metaTranslationInt:
             if metaTranslationInt[key] in self.meta:
                 setattr(self, key, int(self.meta[metaTranslationInt[key]]))
-            else:
+            elif self.verbose:
                 print(f"Warning: could not find {key} while reading {vrtFile}")
         # floating point fields
         for key in metaTranslationF:
             if metaTranslationF[key] in self.meta:
                 setattr(self, key, float(self.meta[metaTranslationF[key]]))
-            else:
+            elif self.verbose:
                 print(f"Warning: could not find {key} while reading {vrtFile}")
         # Size
         self.nr = r.meta['width']
         self.na = r.meta['height']
-
+        if 'ByteOrder' in self.meta:
+            self.byteOrder = self.meta['ByteOrder']
+        else:
+            self.byteOrder = 'MSB'
+        
     def readOffsets(self, fileRoot=None, rangeFile=None, datFile=None,
                     vrtFile=None):
         '''
@@ -773,11 +787,41 @@ class offsets:
             self.meta['geo1'] = self.geo1
             self.meta['geo2'] = self.geo2
 
+    def setTiff(self, tiff=True):
+        '''
+        Toggle GeoTIFF output mode (writeOffsets/writeOffsetVrt).
+        '''
+        self.tiff = tiff
+
+    def writeImageTiff(self, fileName, data, dataType=gdal.GDT_Float32,
+                       noData=-2.e9):
+        '''
+        Write a single-band GeoTIFF with a pixel-coord geotransform. No vertical
+        flip: row 0 of the array is the top row of the tif (row 0 = azimuth 0),
+        matching the raw-binary/VRTRawRasterBand convention. fileName gets a
+        .tif appended if it does not already end in .tif.
+        '''
+        if not fileName.endswith('.tif'):
+            fileName = fileName + '.tif'
+        na, nr = data.shape
+        drv = gdal.GetDriverByName('GTiff')
+        ds = drv.Create(fileName, nr, na, 1, dataType,
+                        options=['COMPRESS=DEFLATE'])
+        ds.SetGeoTransform([-0.5, 1., 0., -0.5, 0., 1.])
+        band = ds.GetRasterBand(1)
+        band.SetNoDataValue(noData)
+        band.WriteArray(np.ascontiguousarray(data))
+        if self.meta is not None:
+            ds.SetMetadata({k: str(v) for k, v in self.meta.items()})
+        ds = None
+        return fileName
+
     def writeOffsetVrt(self, newVRTFile, sourceFiles, descriptions,
                        byteOrder=None, additionalMetaData=None):
         '''
         Write a vrt for the file. Note sourcefiles and descriptions have
-        to be passed in.
+        to be passed in. In tiff mode the bands are SimpleSources referencing
+        <sourceFile>.tif; otherwise VRTRawRasterBand referencing the raw file.
         '''
         print(sourceFiles)
         print(descriptions)
@@ -789,13 +833,14 @@ class offsets:
         drv = gdal.GetDriverByName("VRT")
         vrt = drv.Create(newVRTFile, self.nr, self.na, bands=0,
                          eType=gdal.GDT_Float32)
-        vrt.SetGeoTransform([0.5, 0.5, 1., 0., 0., 1.])
+        vrt.SetGeoTransform([-0.5, 1., 0., -0.5, 0., 1.])
 
         if self.meta is None:
             self.genMeta()
         #
         if byteOrder is None:
             if "ByteOrder" in self.meta:
+                print()
                 byteOrder = self.meta["ByteOrder"]
             else:
                 byteOrder = "MSB"
@@ -803,19 +848,38 @@ class offsets:
         else:
             self.byteOrder = byteOrder
             self.meta["ByteOrder"] = byteOrder
+
+        #
         if additionalMetaData is not None:
             self.meta.update(additionalMetaData)
         vrt.SetMetadata(self.meta)
         # Look to add bands
         for sourceFile, description, bandNumber in \
                 zip(sourceFiles, descriptions, range(1, 1 + len(sourceFiles))):
-            options = [f"SourceFilename={sourceFile}", "relativeToVRT=1",
-                       "subclass=VRTRawRasterBand", f"BYTEORDER={byteOrder}",
-                       bytes(0)]
-            #
-            print(sourceFile, description, bandNumber)
-            vrt.AddBand(gdal.GDT_Float32, options=options)
-            band = vrt.GetRasterBand(bandNumber)
+            if self.tiff:
+                # SimpleSource referencing the single-band GeoTIFF. Built by hand
+                # (not gdal.BuildVRT, which rejects positive NS resolution).
+                tifFile = sourceFile if sourceFile.endswith('.tif') \
+                    else sourceFile + '.tif'
+                src = ('<SimpleSource>'
+                       f'<SourceFilename relativeToVRT="1">{tifFile}'
+                       '</SourceFilename><SourceBand>1</SourceBand>'
+                       f'<SrcRect xOff="0" yOff="0" xSize="{self.nr}" '
+                       f'ySize="{self.na}"/>'
+                       f'<DstRect xOff="0" yOff="0" xSize="{self.nr}" '
+                       f'ySize="{self.na}"/></SimpleSource>')
+                vrt.AddBand(gdal.GDT_Float32)
+                band = vrt.GetRasterBand(bandNumber)
+                band.SetMetadataItem('source_0', src, 'new_vrt_sources')
+                band.SetNoDataValue(-2.e9)
+            else:
+                options = [f"SourceFilename={sourceFile}", "relativeToVRT=1",
+                           "subclass=VRTRawRasterBand", f"BYTEORDER={byteOrder}",
+                           bytes(0)]
+                #
+                print(sourceFile, description, bandNumber, byteOrder)
+                vrt.AddBand(gdal.GDT_Float32, options=options)
+                band = vrt.GetRasterBand(bandNumber)
             #band.SetDescription(description)
             band.SetMetadataItem("Description", description)
         # Close the vrt
@@ -856,10 +920,15 @@ class offsets:
         return {'MSB': '>f4', 'LSB': 'f4'}[byteOrder]
 
     def writeOffsets(self, fileRoot=None, rangeFile=None, datFile=None,
-                     noDatFiles=False, rootOnly=False, byteOrder='MSB'):
+                     noDatFiles=False, rootOnly=False, byteOrder=None):
         '''
         Write Offsets
         '''
+        if byteOrder is None:
+            if hasattr(self, 'byteOrder'):
+                 byteOrder = self.byteOrder
+            else:
+                byteOrder = 'MSB'
         # process file names if needed
         floatFormat = self.floatFormat(byteOrder=byteOrder)
         if len(self.azimuthFile) < 1 or fileRoot is not None:
@@ -870,9 +939,24 @@ class offsets:
         # write dat files
         if not noDatFiles:
             self.writeDatFiles(datFile=datFile, rootOnly=rootOnly)
-        # write offsets
+        # write offsets (GeoTIFF in tiff mode, else raw binary)
+        if self.tiff:
+            if self.meta is None:
+                self.genMeta()
+            self.writeImageTiff(self.rangeFile, self.rgOff)
+            self.writeImageTiff(self.azimuthFile, self.azOff)
+            print('******', self.azimuthFile, 'GeoTIFF')
+            if len(self.mask) > 0 and len(self.maskFile) > 0:
+                self.writeImageTiff(self.maskFile, self.mask,
+                                    dataType=gdal.GDT_Byte, noData=0)
+            if self.sigmaAFile is not None and self.sigmaRFile is not None and \
+                    len(self.sigmaA) > 0 and len(self.sigmaR) > 0:
+                self.writeImageTiff(self.sigmaAFile, self.sigmaA)
+                self.writeImageTiff(self.sigmaRFile, self.sigmaR)
+            return
         writeImage(self.rangeFile, self.rgOff, floatFormat)
         writeImage(self.azimuthFile, self.azOff, floatFormat)
+        print('******', self.azimuthFile, floatFormat)
         # write mask if needed
         if len(self.mask) > 0 and len(self.maskFile) > 0:
             writeImage(self.maskFile, self.mask, 'u1')
@@ -881,7 +965,7 @@ class offsets:
                 len(self.sigmaA) > 0 and len(self.sigmaR) > 0:
             if self.verbose:
                 print(f'writing sigmaA {self.sigmaAFile} SigmaR '
-                      f'{self.sigmaRFile}')
+                      f'{self.sigmaRFile} format {floatFormat} {byteOrder}')
             writeImage(self.sigmaAFile, self.sigmaA, floatFormat)
             writeImage(self.sigmaRFile, self.sigmaR, floatFormat)
 

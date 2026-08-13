@@ -14,7 +14,7 @@ def processProfile(xls, yls, deltaX):
     xdom, ydom, dist = np.array([]), np.array([]), np.array([])
     # Compute distances for each segment
     dxs, dys = np.diff(xls), np.diff(yls)
-    distances = np.cumsum(np.sqrt(dxs**2 + dys**2))
+    distances = np.sqrt(dxs**2 + dys**2)
     pointCounts = np.rint(distances/deltaX)
     # Process each segment
     for dist, dx, dy, xl, yl, nPts in zip(distances, dxs, dys, xls, yls,

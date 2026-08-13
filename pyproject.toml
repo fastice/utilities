@@ -21,5 +21,3 @@ packages = ["utilities"]
 Homepage = "https://github.com/fastice/utilities"
 Repository = "https://github.com/fastice/utilities"
 
-[project.scripts]
-

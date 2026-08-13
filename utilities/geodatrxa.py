@@ -182,7 +182,7 @@ class geodatrxa:
     def parseGeojson(self, geojsonData, echo=False):
         # geojson dicts
         props = geojsonData['properties']
-        coords = geojsonData['geometry']['coordinates']
+        coords = np.array(geojsonData['geometry']['coordinates'][0])
         # translation from geojson to geodatrxa variables
         translation = {'skew': 'SkewOffset', 'squint': 'Squint',
                        'nr': 'MLRangeSize', 'na': 'MLAzimuthSize',
@@ -200,6 +200,14 @@ class geodatrxa:
         # Grab values
         for key, value in translation.items():
             setattr(self, key, props[value])
+        # Swap coordinates if needed
+       
+        if 'coordOrder' in props:
+            # print(coords)
+            # print('here', props['coordOrder'] )
+            if props['coordOrder'] == 'LonLat':
+                # print('swappping coords')
+                coords = coords[:, [1, 0]]
         # lower case
         self.ascdesc = self.ascdesc.lower()
         self.lookdir = self.lookdir.lower()
@@ -230,7 +238,7 @@ class geodatrxa:
         self.corners = np.zeros((5, 2))
         index = [0, 3, 1, 2]
         for i in range(0, 4):
-            self.corners[i, :] = coords[0][index[i]]
+            self.corners[i, :] = coords[index[i]]
         self.corners[4, :] = props['CenterLatLon']
         #
         # State vector description
@@ -479,7 +487,7 @@ class geodatrxa:
                                    datum='WGS84')
             self.llzToEcef = pyproj.Transformer.from_proj(self.llz, self.ecef)
 
-        return self.llzToEcef.transform(lat, lon, zelev, radians=False)
+        return self.llzToEcef.transform(lon, lat, zelev, radians=False)
 
     def ReH(self, myTime):
         sPt = np.array(self.interpPos(myTime))
