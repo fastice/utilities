@@ -490,6 +490,58 @@ class geoimage:
             fileNames = self.dataFileNames(fileName, tiff=tiff, vxMod=vxMod)
         self.readFiles(fileNames, dType, tiff=tiff, bandMap=bandMap)
 
+    def readDataWindow(self, fileName, xMinKm, xMaxKm, yMinKm, yMaxKm,
+                       geoType=None, tiff=True, epsg=None, wktFile=None,
+                       padPixels=2):
+        """ Read only the part of a per-component GeoTIFF set (fileName +
+        suffix + '.tif', as written by writeMyTiff) that covers the km box
+        [xMinKm, xMaxKm] x [yMinKm, yMaxKm] (pixel-centre PS coordinates),
+        padded by padPixels. Sets self.geo to the WINDOW's geodat and fills the
+        components exactly as readData() would for a full read, so interpGeo /
+        setupInterp work unchanged on the window. Returns self, or None when
+        the box does not overlap the raster or a component file is missing.
+        Used by autocleanNISAR against a whole-track velocityStats composite
+        that would be far too large to read in full. """
+        if geoType is not None:
+            self.setGeoType(geoType)
+        if not tiff:
+            myerror('readDataWindow: only tiff=True is supported')
+        wkt = self.getWKT_PROJ(epsg, wktFile)
+        cfg = _TYPE_CONFIG[self.geoType]
+        fileNames = self.dataFileNames(fileName, tiff=True)
+        if not all(os.path.exists(f) for f in fileNames):
+            return None
+        domain = self.getDomain(epsg)
+        full = geodat(verbose=False, domain=domain, wkt=wkt)
+        full.readGeodatFromTiff(fileNames[0])
+        dxKm, dyKm = full.pixSizeInKm()
+        c0 = int(np.floor((xMinKm - full.x0) / dxKm)) - padPixels
+        c1 = int(np.ceil((xMaxKm - full.x0) / dxKm)) + padPixels + 1
+        r0 = int(np.floor((yMinKm - full.y0) / dyKm)) - padPixels
+        r1 = int(np.ceil((yMaxKm - full.y0) / dyKm)) + padPixels + 1
+        c0, c1 = max(c0, 0), min(c1, full.xs)
+        r0, r1 = max(r0, 0), min(r1, full.ys)
+        if c1 <= c0 or r1 <= r0:
+            return None
+        self.geo = geodat(x0=full.x0 + c0 * dxKm, y0=full.y0 + r0 * dyKm,
+                          xs=c1 - c0, ys=r1 - r0, dx=full.dx, dy=full.dy,
+                          domain=domain, verbose=False, wkt=wkt)
+        self.xyCoordinates()
+        minValue = -2.e9
+        for comp, f in zip(cfg['components'], fileNames):
+            ds = gdal.Open(f)
+            # tif rows run top-down; geoimage arrays are bottom-up
+            arr = ds.GetRasterBand(1).ReadAsArray(c0, full.ys - r1, c1 - c0, r1 - r0)
+            ds = None
+            arr = np.flipud(arr)
+            if np.sum(np.isnan(arr)) == 0 and isinstance(arr[0, 0], np.floating):
+                arr[arr <= minValue] = np.nan
+            setattr(self, comp, arr)
+        if cfg['magAttr']:
+            comps = [getattr(self, c).astype(float) for c in cfg['components']]
+            setattr(self, cfg['magAttr'], np.sqrt(sum(c ** 2 for c in comps)))
+        return self
+
     def writeData(self, fileName, geoType=None, geoFile=None, dType='>f4'):
         """ Write binary flat files + geodat sidecars for all components. """
         if geoType is not None:

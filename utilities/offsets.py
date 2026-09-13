@@ -598,7 +598,7 @@ class offsets:
             vrtFile = self.vrtFile
         # Check file exists
         if not os.path.exists(vrtFile):
-            myerror("readVrt: vrtfiles does not exist {vrtFile}")
+            myerror(f"readVrt: vrt file does not exist {vrtFile}")
         #
         r = rasterio.open(vrtFile)
         self.meta = r.tags()
@@ -612,17 +612,21 @@ class offsets:
             # try again with descriptions
             allBands = dict(zip(r.descriptions, range(1, r.count+1)))
         #print(allBands)
+        # Case-insensitive lookup, since band names written by the C code are
+        # derived from the tif file suffix in some paths and given explicitly in
+        # others (e.g. 'mask' vs 'Mask' for offsets.*.mask.vrt)
+        lowerBands = {k.lower(): v for k, v in allBands.items()}
         # Loop over requested variables
         for bandKey in bandTranslation:
-            if bandKey in allBands:
+            bandIndex = allBands.get(bandKey, lowerBands.get(bandKey.lower()))
+            if bandIndex is not None:
                 if self.verbose:
                     print(f'Reading Variable {bandTranslation[bandKey]}')
                 varName = bandTranslation[bandKey]
-                setattr(self, varName, r.read(allBands[bandKey]))
+                setattr(self, varName, r.read(bandIndex))
                 #
                 if varName in fileNames:
-                    setattr(self, fileNames[varName],
-                            r.files[allBands[bandKey]])
+                    setattr(self, fileNames[varName], r.files[bandIndex])
             else:
                 myerror(f'readVrt: Could not find requested band: {bandKey}'
                         f'in {vrtFile}')
@@ -817,11 +821,15 @@ class offsets:
         return fileName
 
     def writeOffsetVrt(self, newVRTFile, sourceFiles, descriptions,
-                       byteOrder=None, additionalMetaData=None):
+                       byteOrder=None, additionalMetaData=None,
+                       dataType=gdal.GDT_Float32, noData=-2.e9):
         '''
         Write a vrt for the file. Note sourcefiles and descriptions have
         to be passed in. In tiff mode the bands are SimpleSources referencing
         <sourceFile>.tif; otherwise VRTRawRasterBand referencing the raw file.
+
+        dataType/noData default to the Float32 offset case; pass GDT_Byte and 0
+        to describe a mask, which is the only non-float raster written this way.
         '''
         print(sourceFiles)
         print(descriptions)
@@ -868,17 +876,17 @@ class offsets:
                        f'ySize="{self.na}"/>'
                        f'<DstRect xOff="0" yOff="0" xSize="{self.nr}" '
                        f'ySize="{self.na}"/></SimpleSource>')
-                vrt.AddBand(gdal.GDT_Float32)
+                vrt.AddBand(dataType)
                 band = vrt.GetRasterBand(bandNumber)
                 band.SetMetadataItem('source_0', src, 'new_vrt_sources')
-                band.SetNoDataValue(-2.e9)
+                band.SetNoDataValue(noData)
             else:
                 options = [f"SourceFilename={sourceFile}", "relativeToVRT=1",
                            "subclass=VRTRawRasterBand", f"BYTEORDER={byteOrder}",
                            bytes(0)]
                 #
                 print(sourceFile, description, bandNumber, byteOrder)
-                vrt.AddBand(gdal.GDT_Float32, options=options)
+                vrt.AddBand(dataType, options=options)
                 band = vrt.GetRasterBand(bandNumber)
             #band.SetDescription(description)
             band.SetMetadataItem("Description", description)

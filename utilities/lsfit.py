@@ -36,7 +36,7 @@ class lsfit:
                     self.nTiesRejected = \
                         np.array([int(x) for x in
                                   line.split('=')[-1].strip().split()])
-                elif 'nTiesUsed' in line:
+                elif 'N_ties_used' in line:
                     self.nTiesUsed = int(line.split('=')[-1].strip())
                 elif 'Xfit' in line:
                     self.xFit = \
