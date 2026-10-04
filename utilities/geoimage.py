@@ -392,6 +392,10 @@ class geoimage:
             domain = 'greenland'
         elif epsg == 3031:
             domain = 'antarctica'
+        elif str(epsg).isdigit():
+            # Any other code (e.g. UTM): callers pass the wkt built from this epsg, which
+            # sets the geodat projection, so the domain is only its unused default.
+            domain = 'greenland'
         else:
             myerror('Unexpected epsg code: ' + str(epsg))
         return domain
